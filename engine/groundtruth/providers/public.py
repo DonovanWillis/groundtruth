@@ -195,7 +195,8 @@ class PublicDataProvider(DataProvider):
                 url = self._open_url(sid, year)
                 with rasterio.Env(**GDAL_ENV), rasterio.open(url) as src:
                     with WarpedVRT(src, crs=MEASURE_CRS, transform=dst_transform, width=width, height=height,
-                                   resampling=Resampling.bilinear, nodata=0) as vrt:
+                                   resampling=Resampling.bilinear, nodata=0, warp_mem_limit=512,
+                                   warp_extras={"NUM_THREADS": os.environ.get("GROUNDTRUTH_WARP_THREADS", "4")}) as vrt:
                         data = vrt.read(indexes=list(bands))  # (B, H, W)
                         m = vrt.read_masks(1) > 0
                 return np.transpose(data, (1, 2, 0)), m
