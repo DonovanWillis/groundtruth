@@ -23,6 +23,20 @@
 | county precompute 2022 | scene 21/51 at 17:14, ~2.6 min/scene, ETA ~18:35; 2020 after that (~20:20) |
 | county evaluation | PENDING (needs the county index) |
 
+## ⚠ 17:16: memory pressure on this PC (read first)
+- Windows had **2.3 GB free of 31.9 GB**. Claude Code stopped two of my background tasks for that reason: the county-index
+  **watcher** and the **tile-cache warm** (part done). I have **not** restarted them and started nothing new.
+- Still running and healthy at 17:16: the county precompute (2022, scene 21/51; ~5.1 GB RSS), the API (~2.3 GB) and the
+  label page (0.22 s).
+- Because the watcher is gone, nothing wakes me when the 2022 index lands (~18:35), so the county steps (eval, county
+  numbers, outline warm) **wait for you or for my next turn**. To resume:
+  1. Check the index: `ls data/precompute/chips224s192-g0.6-v3c8p192/county/2022/index.json`
+  2. `bash scripts/gtg.sh python scripts/evaluate.py --aoi county`
+  3. `bash scripts/demo_check.sh` (it uses county automatically)
+  4. `bash scripts/demo_warm.sh` (tiles + outlines)
+- If memory stays tight: stop my API with `kill $(cat data/logs/api.pid)` (it frees ~2.3 GB; the UI needs it, the precompute
+  doesn't). There's also a `next-server` process in WSL that isn't mine; I left it alone.
+
 ## 3. Decisions needed (max 5)
 1. **Tailnet demo access:** run `scripts/tailnet_serve.sh --i-am-monish-and-approve` (`tailscale serve`, tailnet only, port 8000,
    no Funnel) when you want Don or judges on the tailnet to see it. Prepared, NOT enabled.
