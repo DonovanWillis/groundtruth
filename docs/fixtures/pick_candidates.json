@@ -50,7 +50,7 @@
        "chip_id": "2022_e4477_n33683",
        "year": 2022,
        "scene_id": "nc_m_3508058_nw_17_060_20220602",
-       "thumb_url": "/api/v1/chips/2022_e4477_n33683.jpg",
+       "thumb_url": "/api/v1/chips/2022_e4477_n33683.jpg?aoi=south_charlotte",
        "chip_bbox": [
         -80.82725906841438,
         35.065147610353364,
@@ -117,7 +117,7 @@
        "chip_id": "2022_e4472_n33675",
        "year": 2022,
        "scene_id": "nc_m_3508058_sw_17_060_20220602",
-       "thumb_url": "/api/v1/chips/2022_e4472_n33675.jpg",
+       "thumb_url": "/api/v1/chips/2022_e4472_n33675.jpg?aoi=south_charlotte",
        "chip_bbox": [
         -80.83359312989278,
         35.05684616426456,
@@ -187,7 +187,7 @@
        "chip_id": "2022_e4482_n33672",
        "year": 2022,
        "scene_id": "nc_m_3508058_sw_17_060_20220602",
-       "thumb_url": "/api/v1/chips/2022_e4482_n33672.jpg",
+       "thumb_url": "/api/v1/chips/2022_e4482_n33672.jpg?aoi=south_charlotte",
        "chip_bbox": [
         -80.82096681869477,
         35.05371163960155,
@@ -240,14 +240,14 @@
    }
   },
   "confidence": null,
-  "method": "OpenCLIP sense prompts (conf/senses.json) \u2192 each chip assigned to its best sense \u2192 one tile per sense, DINOv2 4\u00d74-cell MMR diversity (cos<0.8); object cell localised by OpenCLIP on 16 per-cell context crops",
+  "method": "OpenCLIP sense prompts (conf/senses.json) \u2192 each chip assigned to its best sense \u2192 one tile per sense, DINOv2 8\u00d78-cell MMR diversity (cos<0.8); object cell localised by OpenCLIP in two stages (16 block windows, then 4 cells)",
   "assumptions": [
    "The configured senses cover the plausible meanings of the query"
   ],
   "limits": [
    "NAIP 2022 at 0.6 m/px: objects smaller than ~3 m are not resolvable",
    "Scores are embedding similarities, not calibrated probabilities",
-   "Hits are 33.6 m sub-cells of 134 m chips, not object outlines (use `outline`)",
+   "Hits are 16.8 m cells of 134 m chips until outlined (`outline` / find_all's background outlines)",
    "Only the 'south_charlotte' area is indexed, not the whole county"
   ],
   "sources": [
@@ -262,22 +262,22 @@
    {
     "phase": "embed_query",
     "detail": "raw query + 6 sense prompts (swimming_pool)",
-    "ms": 109.66
+    "ms": 42.05
    },
    {
     "phase": "candidate_pool",
     "detail": "top 200 raw + top 40 per sense",
-    "ms": 106.8
+    "ms": 74.77
    },
    {
     "phase": "pick",
     "detail": "one per sense, DINOv2 cell diversity cos<0.8",
-    "ms": 6.05
+    "ms": 1.56
    },
    {
     "phase": "localise",
-    "detail": "OpenCLIP on 16 context crops \u00d7 6 tiles (sense-specific)",
-    "ms": 1746.36
+    "detail": "OpenCLIP 2-stage (16 windows + 4 cells) \u00d7 6 tiles, batched (sense-specific)",
+    "ms": 620.0
    }
   ],
   "declined_reason": null,

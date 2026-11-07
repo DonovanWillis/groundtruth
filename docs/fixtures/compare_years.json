@@ -65,7 +65,7 @@
        "chip_id": "2022_e4477_n33672",
        "year": 2022,
        "scene_id": "nc_m_3508058_sw_17_060_20220602",
-       "thumb_url": "/api/v1/chips/2022_e4477_n33672.jpg",
+       "thumb_url": "/api/v1/chips/2022_e4477_n33672.jpg?aoi=south_charlotte",
        "chip_bbox": [
         -80.82728313389417,
         35.05372087337452,
@@ -121,7 +121,7 @@
        "chip_id": "2022_e4478_n33677",
        "year": 2022,
        "scene_id": "nc_m_3508058_sw_17_060_20220602",
-       "thumb_url": "/api/v1/chips/2022_e4478_n33677.jpg",
+       "thumb_url": "/api/v1/chips/2022_e4478_n33677.jpg?aoi=south_charlotte",
        "chip_bbox": [
         -80.8260088534576,
         35.05891302660923,
@@ -177,7 +177,7 @@
        "chip_id": "2022_e4477_n33675",
        "year": 2022,
        "scene_id": "nc_m_3508058_sw_17_060_20220602",
-       "thumb_url": "/api/v1/chips/2022_e4477_n33675.jpg",
+       "thumb_url": "/api/v1/chips/2022_e4477_n33675.jpg?aoi=south_charlotte",
        "chip_bbox": [
         -80.82727657192476,
         35.05683725832728,
@@ -219,7 +219,7 @@
   "limits": [
    "NAIP 2022 at 0.6 m/px: objects smaller than ~3 m are not resolvable",
    "Scores are embedding similarities, not calibrated probabilities",
-   "Hits are 33.6 m sub-cells of 134 m chips, not object outlines (use `outline`)",
+   "Hits are 16.8 m cells of 134 m chips until outlined (`outline` / find_all's background outlines)",
    "Only the 'south_charlotte' area is indexed, not the whole county",
    "NAIP 2020 and 2022 differ in season, sun angle and colour balance; covered or drained pools look 'not a pool'",
    "'new' means the concept's appearance is present now and absent then in this cell, not a permit or construction date",
@@ -237,7 +237,7 @@
    {
     "phase": "compare",
     "detail": "12 cells vs 2020 (cell similarity + colour)",
-    "ms": 265.51
+    "ms": 178.3
    }
   ],
   "declined_reason": null,

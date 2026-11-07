@@ -317,12 +317,12 @@
    {
     "phase": "prepare",
     "detail": "{\"within_m_of\": {\"layer\": \"osm_i485\", \"m\": 1500}, \"max_area_acres\": 1.0}",
-    "ms": 18.9
+    "ms": 14.27
    },
    {
     "phase": "filter",
     "detail": "5 features",
-    "ms": 0.63
+    "ms": 0.47
    }
   ],
   "declined_reason": null,

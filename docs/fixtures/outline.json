@@ -391,7 +391,7 @@
   "limits": [
    "NAIP 2022 at 0.6 m/px: objects smaller than ~3 m are not resolvable",
    "Scores are embedding similarities, not calibrated probabilities",
-   "Hits are 33.6 m sub-cells of 134 m chips, not object outlines (use `outline`)",
+   "Hits are 16.8 m cells of 134 m chips until outlined (`outline` / find_all's background outlines)",
    "Only the 'south_charlotte' area is indexed, not the whole county",
    "Outlines from 0.6 m imagery: edges \u00b11 px (0.6 m)"
   ],
@@ -407,7 +407,7 @@
    {
     "phase": "sam2",
     "detail": "1 outlines (SAM 2.1 hiera-tiny, cuda)",
-    "ms": 3.17
+    "ms": 3.7
    }
   ],
   "declined_reason": null

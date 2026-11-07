@@ -51,7 +51,7 @@
        "chip_id": "2022_e4478_n33678",
        "year": 2022,
        "scene_id": "nc_m_3508058_sw_17_060_20220602",
-       "thumb_url": "/api/v1/chips/2022_e4478_n33678.jpg",
+       "thumb_url": "/api/v1/chips/2022_e4478_n33678.jpg?aoi=south_charlotte",
        "chip_bbox": [
         -80.82600664968541,
         35.059951820810255,
@@ -104,7 +104,7 @@
        "chip_id": "2022_e4482_n33673",
        "year": 2022,
        "scene_id": "nc_m_3508058_sw_17_060_20220602",
-       "thumb_url": "/api/v1/chips/2022_e4482_n33673.jpg",
+       "thumb_url": "/api/v1/chips/2022_e4482_n33673.jpg?aoi=south_charlotte",
        "chip_bbox": [
         -80.82096455149751,
         35.054750434410195,
@@ -157,7 +157,7 @@
        "chip_id": "2022_e4472_n33675",
        "year": 2022,
        "scene_id": "nc_m_3508058_sw_17_060_20220602",
-       "thumb_url": "/api/v1/chips/2022_e4472_n33675.jpg",
+       "thumb_url": "/api/v1/chips/2022_e4472_n33675.jpg?aoi=south_charlotte",
        "chip_bbox": [
         -80.83359312989278,
         35.05684616426456,
@@ -192,7 +192,7 @@
   "limits": [
    "NAIP 2022 at 0.6 m/px: objects smaller than ~3 m are not resolvable",
    "Scores are embedding similarities, not calibrated probabilities",
-   "Hits are 33.6 m sub-cells of 134 m chips, not object outlines (use `outline`)",
+   "Hits are 16.8 m cells of 134 m chips until outlined (`outline` / find_all's background outlines)",
    "Only the 'south_charlotte' area is indexed, not the whole county"
   ],
   "sources": [
@@ -207,17 +207,17 @@
    {
     "phase": "embed_query",
     "detail": "OpenCLIP text, 4-prompt ensemble",
-    "ms": 8040.9
+    "ms": 5182.58
    },
    {
     "phase": "search",
     "detail": "max over 1 CLIP views \u00d7 272 chips",
-    "ms": 51.2
+    "ms": 31.31
    },
    {
     "phase": "localise+dedupe",
     "detail": "salient DINOv2 cell in best view; cell NMS",
-    "ms": 26.6
+    "ms": 20.64
    }
   ],
   "declined_reason": null,

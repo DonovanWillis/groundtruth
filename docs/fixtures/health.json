@@ -5,26 +5,56 @@
  },
  "response": {
   "ok": true,
-  "contract": "0.3",
+  "contract": "0.3.1",
   "engine_version": "0.2.0",
   "indexes": [
    {
     "aoi": "south_charlotte",
     "year": 2020,
     "chips": 272,
-    "index_version": "chips224s192-g0.6-v3c8p192"
+    "index_version": "chips224s192-g0.6-v3c8p192",
+    "bbox": [
+     -80.83613,
+     35.04955,
+     -80.81441,
+     35.06637
+    ]
    },
    {
     "aoi": "south_charlotte",
     "year": 2022,
     "chips": 272,
-    "index_version": "chips224s192-g0.6-v3c8p192"
+    "index_version": "chips224s192-g0.6-v3c8p192",
+    "bbox": [
+     -80.83613,
+     35.04955,
+     -80.81441,
+     35.06637
+    ]
+   },
+   {
+    "aoi": "unc_charlotte",
+    "year": 2020,
+    "chips": 342,
+    "index_version": "chips224s192-g0.6-v3c8p192",
+    "bbox": [
+     -80.74568,
+     35.2966,
+     -80.72133,
+     35.31552
+    ]
    },
    {
     "aoi": "unc_charlotte",
     "year": 2022,
     "chips": 342,
-    "index_version": "chips224s192-g0.6-v3c8p192"
+    "index_version": "chips224s192-g0.6-v3c8p192",
+    "bbox": [
+     -80.74568,
+     35.2966,
+     -80.72133,
+     35.31552
+    ]
    }
   ],
   "primary_year": 2022

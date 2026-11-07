@@ -1,4 +1,4 @@
-# Groundtruth API contract — v0.3
+# Groundtruth API contract — v0.3.1
 
 Every tool, whether an engine function, an HTTP route or an agent action, returns **one envelope**. Implementation:
 `engine/groundtruth/envelope.py` (pydantic, validated). Example responses for every tool: `docs/fixtures/<tool>.json`.
@@ -82,6 +82,13 @@ built, otherwise the largest indexed slice).
 - `aoi`: `"county"` appears when the full-county index lands. Until then only slices (`unc_charlotte`, `south_charlotte`).
 
 ## Changelog
+- **v0.3.1 (2026-11-07)**: additive only.
+  - `outline` gains `cached_only: bool` (returns cached outlines plus `metrics.pending`, never runs SAM; for polling), and its
+    default `max` is now 24.
+  - `refine` features now carry `example`, `geometry_kind`, `area_m2`, `area_acres`, plus the outline geometry when cached.
+  - `/health` indexes include `bbox`.
+  - `thumb_url` includes `?aoi=` so chips from any index resolve.
+  - Method and limits text corrected to the 8×8 (16.8 m) format.
 - **v0.3 (2026-11-07)**: new tools `find_all` (core: pick → county/place results → dedupe → background outlines →
   count/acres/median) and `compare_years` (new / existing / unsure since 2020, answering Donovan's request).
   `find_similar` gains `bbox, rerank, concept`; `refine` gains `bbox/place/concept`, `properties.confidence` and `why`;
