@@ -87,10 +87,26 @@ def osm() -> None:
             os.replace(pbf.with_suffix(".part"), pbf)
     snapshot = "2026-11-06 (Geofabrik north-carolina, via ORYN cache)" if ORYN_PBF.exists() else TODAY
 
-    roads, stations, water, campus = [], [], [], []
-    road_classes = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary",
-                    "secondary_link", "tertiary", "tertiary_link", "residential", "unclassified", "service",
-                    "living_street"}
+    # Pass 1 (low memory): tag-filter the NC extract to only what we need, plus referenced nodes/ways
+    # (pyosmium BackReferenceWriter = `osmium tags-filter`). Geometry is built from the small file afterwards.
+    small = pbf_dir / "mecklenburg_filtered.osm.pbf"
+    if not small.exists():
+        t0 = time.time()
+        keep = osmium.filter.TagFilter(
+            ("highway", "motorway"), ("highway", "motorway_link"),
+            ("railway", "light_rail"), ("railway", "station"), ("railway", "halt"), ("railway", "stop"),
+            ("natural", "water"), ("landuse", "reservoir"),
+            ("waterway", "river"), ("waterway", "stream"), ("waterway", "canal"), ("waterway", "riverbank"),
+            ("amenity", "university"))
+        with osmium.BackReferenceWriter(str(small.with_suffix(".part.pbf")), ref_src=str(pbf), overwrite=True) as w:
+            for obj in osmium.FileProcessor(str(pbf)).with_filter(keep):
+                w.add(obj)
+        os.replace(small.with_suffix(".part.pbf"), small)
+        print(f"  tag-filtered NC extract → {small.name} ({small.stat().st_size/1e6:.0f} MB, {time.time()-t0:.0f}s)")
+    pbf = small
+
+    roads, stations, water, campus, rail = [], [], [], [], []
+    road_classes = {"motorway", "motorway_link"}
     fab = osmium.geom.WKBFactory()
     bbox = box(W - 0.01, S - 0.01, E + 0.01, N + 0.01)
 
@@ -111,6 +127,15 @@ def osm() -> None:
         def way(self, w):
             t = w.tags
             hw, ww = t.get("highway"), t.get("waterway")
+            if t.get("railway") == "light_rail":
+                try:
+                    g = clip(wkb.loads(fab.create_linestring(w), hex=True))
+                except Exception:
+                    return
+                if g is not None and not g.is_empty:
+                    rail.append({"type": "Feature", "geometry": mapping(g), "properties": {
+                        "osm_id": f"way/{w.id}", "name": t.get("name", ""), "service": t.get("service", "")}})
+                return
             if hw not in road_classes and ww not in ("river", "stream", "canal"):
                 return
             try:
@@ -159,13 +184,15 @@ def osm() -> None:
     print("scanning OSM extract (one pass)…")
     H().apply_file(str(pbf), locations=True, idx="flex_mem")
     print(f"  done in {time.time()-t0:.0f}s")
-    write_fc("osm_roads", roads)
+    write_fc("osm_motorways", roads)
+    write_fc("osm_i485", [f for f in roads if f["properties"]["is_i485"]])
+    write_fc("osm_light_rail", rail)
     write_fc("osm_light_rail_stations", stations)
     write_fc("osm_water", water)
     write_fc("osm_unc_charlotte_campus", campus)
     record_sources([{"name": f"OpenStreetMap {k}", "url": "https://www.openstreetmap.org/copyright",
                      "date": snapshot, "licence": "ODbL 1.0 — © OpenStreetMap contributors"}
-                    for k in ("roads", "light rail stations", "water", "UNC Charlotte campus")])
+                    for k in ("motorways", "light rail", "light rail stations", "water", "UNC Charlotte campus")])
 
 
 # ---------------- FEMA NFHL ----------------

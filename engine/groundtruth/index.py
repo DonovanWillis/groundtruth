@@ -1,14 +1,32 @@
-"""Loads a precomputed chip index (chips.parquet + {dino,clip}.npy/.faiss + thumbs pack)."""
+"""Loads a precomputed v2 chip index: chips.parquet + dino.npy (N,16,768) + clip.npy (N,V,512) + FAISS fp16
+indices over all cell/view rows + a JPEG thumbnail pack.
+
+Row r of dino.faiss is (chip r // 16, cell r % 16); row r of clip.faiss is (chip r // V, view r % V).
+Cells are numbered row-major from the north-west corner of the chip (4×4 grid of 56 px = 33.6 m).
+CLIP views are [whole, NW, NE, SW, SE].
+"""
 
 from __future__ import annotations
 
 import json
 from functools import cached_property
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 import pyarrow.parquet as pq
+
+from groundtruth import config
+from groundtruth.geo import MEASURE_CRS, WGS84, transformer
+
+# CLIP view → DINO cells it covers (4×4 grid, row-major)
+VIEW_CELLS: dict[int, tuple[int, ...]] = {
+    0: tuple(range(16)),
+    1: (0, 1, 4, 5),      # NW
+    2: (2, 3, 6, 7),      # NE
+    3: (8, 9, 12, 13),    # SW
+    4: (10, 11, 14, 15),  # SE
+}
 
 
 class ChipIndex:
@@ -19,19 +37,46 @@ class ChipIndex:
         self.info: dict[str, Any] = json.loads((self.root / "index.json").read_text())
         t = pq.read_table(self.root / "chips.parquet")
         self.meta = {c: t.column(c).to_numpy(zero_copy_only=False) for c in t.column_names}
-        self.ids: list[str] = list(self.meta["chip_id"])
+        self.ids: list[str] = [str(x) for x in self.meta["chip_id"]]
         self.pos = {cid: i for i, cid in enumerate(self.ids)}
+        self.grid = int(self.info.get("cell_grid", config.CELL_GRID))
+        self.n_cells = self.grid * self.grid
 
     def __len__(self) -> int:
         return len(self.ids)
 
+    # ---------- vectors ----------
     @cached_property
-    def dino(self) -> np.ndarray:
-        return np.load(self.root / "dino.npy").astype(np.float32)
+    def dino(self) -> np.ndarray:  # (N, 16, 768) float16, memory-mapped
+        return np.load(self.root / "dino.npy", mmap_mode="r")
 
     @cached_property
-    def clip(self) -> np.ndarray:
-        return np.load(self.root / "clip.npy").astype(np.float32)
+    def clip(self) -> np.ndarray:  # (N, V, 512) float16, memory-mapped
+        return np.load(self.root / "clip.npy", mmap_mode="r")
+
+    @property
+    def n_views(self) -> int:
+        return int(self.clip.shape[1])
+
+    def cells(self, i: int) -> np.ndarray:
+        return np.asarray(self.dino[i], dtype=np.float32)
+
+    def clip_views(self, idx: Iterable[int]) -> np.ndarray:
+        return np.asarray(self.clip[np.asarray(list(idx))], dtype=np.float32)
+
+    @cached_property
+    def background(self) -> np.ndarray:
+        """Mean cell vector over (a sample of) the index: what a 'typical' 33 m patch looks like here."""
+        n = len(self)
+        take = np.linspace(0, n - 1, min(n, 4000)).astype(int)
+        m = np.asarray(self.dino[take], dtype=np.float32).reshape(-1, self.dino.shape[-1]).mean(0)
+        return m / max(np.linalg.norm(m), 1e-12)
+
+    def salient_cell(self, i: int, among: Iterable[int] | None = None) -> int:
+        """The cell least like the county's typical patch (where 'the object' most likely is)."""
+        cand = list(among) if among is not None else list(range(self.n_cells))
+        sims = self.cells(i)[cand] @ self.background
+        return int(cand[int(np.argmin(sims))])
 
     def _faiss(self, name: str):
         import faiss
@@ -46,14 +91,32 @@ class ChipIndex:
     def clip_index(self):
         return self._faiss("clip")
 
-    def search(self, kind: str, q: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
-        """Exact cosine top-k. Ties broken by chip_id (deterministic)."""
+    def search_rows(self, kind: str, q: np.ndarray, k_rows: int) -> tuple[np.ndarray, np.ndarray]:
         idx = self.dino_index if kind == "dino" else self.clip_index
-        k = min(k, len(self))
-        D, I = idx.search(np.ascontiguousarray(q, dtype=np.float32).reshape(1, -1), k)
-        order = sorted(range(len(I[0])), key=lambda j: (-round(float(D[0][j]), 6), self.ids[I[0][j]]))
-        return D[0][order], I[0][order]
+        k_rows = int(min(k_rows, idx.ntotal))
+        D, I = idx.search(np.ascontiguousarray(q, dtype=np.float32).reshape(1, -1), k_rows)
+        return D[0], I[0]
 
+    # ---------- geometry ----------
+    def cell_bounds_m(self, i: int, cell: int) -> tuple[float, float, float, float]:
+        x0, y0 = float(self.meta["x0_m"][i]), float(self.meta["y0_m"][i])
+        size = config.CELL_PX * config.GSD_M
+        r, c = divmod(cell, self.grid)
+        top = y0 + config.CHIP_M
+        return (x0 + c * size, top - (r + 1) * size, x0 + (c + 1) * size, top - r * size)
+
+    def view_bounds_m(self, i: int, view: int) -> tuple[float, float, float, float]:
+        cells = VIEW_CELLS[view]
+        bs = [self.cell_bounds_m(i, c) for c in cells]
+        return (min(b[0] for b in bs), min(b[1] for b in bs), max(b[2] for b in bs), max(b[3] for b in bs))
+
+    @staticmethod
+    def bounds_wgs84(b: tuple[float, float, float, float]) -> list[float]:
+        t = transformer(MEASURE_CRS, WGS84)
+        xs, ys = t.transform([b[0], b[2], b[2], b[0]], [b[1], b[1], b[3], b[3]])
+        return [round(min(xs), 7), round(min(ys), 7), round(max(xs), 7), round(max(ys), 7)]
+
+    # ---------- thumbnails ----------
     @cached_property
     def _thumb_offsets(self) -> np.ndarray:
         return np.load(self.root / "thumbs_offsets.npy")
@@ -64,12 +127,16 @@ class ChipIndex:
             f.seek(int(o[i]))
             return f.read(int(o[i + 1] - o[i]))
 
-    def feature(self, i: int, **props: Any) -> dict[str, Any]:
+    # ---------- features ----------
+    def feature(self, i: int, *, cell: int | None = None, **props: Any) -> dict[str, Any]:
         m = self.meta
         w, s, e, n = (float(m[k][i]) for k in ("west", "south", "east", "north"))
-        return {
-            "type": "Feature", "id": self.ids[i],
-            "geometry": {"type": "Polygon", "coordinates": [[[w, s], [e, s], [e, n], [w, n], [w, s]]]},
-            "properties": {"chip_id": self.ids[i], "year": int(m["year"][i]), "scene_id": str(m["scene_id"][i]),
-                           "thumb_url": f"/api/chips/{self.ids[i]}.jpg", **props},
-        }
+        p: dict[str, Any] = {"chip_id": self.ids[i], "year": int(m["year"][i]), "scene_id": str(m["scene_id"][i]),
+                             "thumb_url": f"/api/chips/{self.ids[i]}.jpg", "chip_bbox": [w, s, e, n]}
+        if cell is not None:
+            p["cell"] = int(cell)
+            p["cell_bbox"] = self.bounds_wgs84(self.cell_bounds_m(i, cell))
+        p.update(props)
+        return {"type": "Feature", "id": self.ids[i],
+                "geometry": {"type": "Polygon", "coordinates": [[[w, s], [e, s], [e, n], [w, n], [w, s]]]},
+                "properties": p}

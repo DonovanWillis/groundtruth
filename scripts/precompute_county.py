@@ -73,8 +73,9 @@ def process_scene(provider, sid, chips, year, dino, clip, batch):
         return None, {"read_s": t_read, "embed_s": 0.0, "n": 0}
     X = np.stack(arrs)
     t1 = time.perf_counter()
-    d = dino.embed_images(X, batch=batch).astype(np.float16)
-    k = clip.embed_images(X, batch=batch).astype(np.float16)
+    d = dino.embed_cells(X, batch=batch, grid=config.CELL_GRID).astype(np.float16)  # (n, 16, 768)
+    t_dino = time.perf_counter() - t1
+    k = clip.embed_multi(X, batch=batch, subcrops=config.CLIP_SUBCROPS).astype(np.float16)  # (n, 5, 512)
     t_emb = time.perf_counter() - t1
     jpegs = []
     for a in arrs:
@@ -86,10 +87,10 @@ def process_scene(provider, sid, chips, year, dino, clip, batch):
         "x0_m": [c.x0_m for c in keep], "y0_m": [c.y0_m for c in keep],
         "west": [b[0] for b in bbs], "south": [b[1] for b in bbs], "east": [b[2] for b in bbs],
         "north": [b[3] for b in bbs], "valid_frac": valid_fracs, "jpeg": jpegs,
-        "dino": pa.FixedSizeListArray.from_arrays(pa.array(d.ravel()), d.shape[1]),
-        "clip": pa.FixedSizeListArray.from_arrays(pa.array(k.ravel()), k.shape[1]),
+        "dino": pa.FixedSizeListArray.from_arrays(pa.array(d.ravel()), d.shape[1] * d.shape[2]),
+        "clip": pa.FixedSizeListArray.from_arrays(pa.array(k.ravel()), k.shape[1] * k.shape[2]),
     })
-    return table, {"read_s": t_read, "embed_s": t_emb, "n": len(keep)}
+    return table, {"read_s": t_read, "embed_s": t_emb, "dino_s": t_dino, "clip_s": t_emb - t_dino, "n": len(keep)}
 
 
 def build_index(out: Path) -> None:
@@ -100,13 +101,16 @@ def build_index(out: Path) -> None:
     t = pa.concat_tables(tables).sort_by("chip_id")
     meta = t.drop_columns(["jpeg", "dino", "clip"])
     pq.write_table(meta, out / "chips.parquet")
-    for col in ("dino", "clip"):
-        dim = t.schema.field(col).type.list_size
-        X = np.asarray(t.column(col).combine_chunks().flatten(), dtype=np.float32).reshape(-1, dim)
-        X /= np.clip(np.linalg.norm(X, axis=1, keepdims=True), 1e-12, None)
+    # vectors: dino (N, 16, 768) cells, clip (N, V, 512) views; one FAISS fp16 index over all rows (cells/views)
+    for col, dim in (("dino", 768), ("clip", 512)):
+        flat = t.column(col).combine_chunks().flatten()
+        X = np.asarray(flat, dtype=np.float32).reshape(t.num_rows, -1, dim)
+        X /= np.clip(np.linalg.norm(X, axis=-1, keepdims=True), 1e-12, None)
         np.save(out / f"{col}.npy", X.astype(np.float16))
-        idx = faiss.IndexFlatIP(dim); idx.add(X)
+        idx = faiss.IndexScalarQuantizer(dim, faiss.ScalarQuantizer.QT_fp16, faiss.METRIC_INNER_PRODUCT)
+        idx.add(X.reshape(-1, dim))
         faiss.write_index(idx, str(out / f"{col}.faiss"))
+        del X
     # thumbnails as one id-sorted jpeg pack (offsets in chips.parquet order)
     blobs = t.column("jpeg").to_pylist()
     offs = np.cumsum([0] + [len(b) for b in blobs]).astype(np.int64)
@@ -116,6 +120,7 @@ def build_index(out: Path) -> None:
     np.save(out / "thumbs_offsets.npy", offs)
     (out / "index.json").write_text(json.dumps({
         "index_version": config.INDEX_VERSION, "chips": t.num_rows, "shards": len(shards),
+        "cell_grid": config.CELL_GRID, "clip_views": ["whole", "NW", "NE", "SW", "SE"] if config.CLIP_SUBCROPS else ["whole"],
         "built": time.strftime("%Y-%m-%dT%H:%M:%S%z")}, indent=2))
     log.info("index built: %d chips from %d shards → %s", t.num_rows, len(shards), out)
 
@@ -172,9 +177,9 @@ def main() -> None:
             provider.local_scene_path(sid, year).unlink(missing_ok=True)
         done_n += st["n"]
         el = time.perf_counter() - t_start
-        log.info("scene %d/%d %s: %d chips read %.1fs embed %.1fs (%.1f chips/s embed) | overall %.2f chips/s, "
-                 "eta %.0f min", i + 1, len(todo), sid, st["n"], st["read_s"], st["embed_s"],
-                 st["n"] / max(st["embed_s"], 1e-6), done_n / el,
+        log.info("scene %d/%d %s: %d chips read %.1fs embed %.1fs (dino %.1fs clip %.1fs; %.1f chips/s) | "
+                 "overall %.2f chips/s, eta %.0f min", i + 1, len(todo), sid, st["n"], st["read_s"], st["embed_s"],
+                 st.get("dino_s", 0), st.get("clip_s", 0), st["n"] / max(st["embed_s"], 1e-6), done_n / el,
                  (total - done_n) / max(done_n / el, 1e-6) / 60)
     build_index(out)
 
