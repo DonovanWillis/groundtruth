@@ -49,6 +49,12 @@ def senses_for(query: str) -> tuple[str | None, list[dict[str, Any]]]:
     return None, []
 
 
+def concepts_default_change() -> dict[str, float]:
+    from groundtruth.rerank import concepts
+
+    return dict(concepts()["_default"].get("change", {}))
+
+
 def parse_example(s: str) -> tuple[str, int | None]:
     if "#" in s:
         cid, c = s.split("#", 1)
@@ -483,6 +489,74 @@ class Engine:
                          confidence=None, method=base.method + "; object dedupe by outline/cell overlap > 50%; SAM 2.1 "
                          "outlines prompted by the matching cell (lazy, cached)",
                          assumptions=base.assumptions, limits=limits, steps=t.steps)
+
+    # ------------------------------------------------------------------ compare_years (search across time)
+    def compare_years(self, examples: Sequence[str], from_year: int = 2020, concept: str | None = None) -> Envelope:
+        """For each result (``chip#cell`` in this engine's year), look at the same cell in ``from_year``: DINOv2 cell
+        similarity across years + concept colour fraction then vs now → change = new | existing | unsure."""
+        tool = "compare_years"
+        from groundtruth.rerank import colour_patches, concept_conf, _cell_patches
+        from PIL import Image
+
+        other_dir = config.precompute_dir(from_year, self.aoi)
+        if not (other_dir / "index.json").exists():
+            return declined(tool, VERSION, f"no {from_year} index for aoi '{self.aoi}' yet")
+        cache = self.__dict__.setdefault("_other_index", {})
+        if from_year not in cache:
+            cache[from_year] = ChipIndex(other_dir)
+        other: ChipIndex = cache[from_year]
+        cc = concept_conf(concept)
+        th = {**concepts_default_change(), **cc.get("change", {})}
+        rule = cc["rerank"].get("colour")
+        t = StepTimer()
+        feats, counts = [], {"new": 0, "existing": 0, "unsure": 0, "no_data": 0}
+        with t.step("compare", f"{len(examples)} cells vs {from_year} (cell similarity + {'colour' if rule else 'no colour'})"):
+            for ex in examples:
+                cid, cell = parse_example(ex)
+                if cid not in self.index.pos:
+                    continue
+                i = self.index.pos[cid]
+                if cell is None:
+                    cell = self.index.salient_cell(i)
+                oid = f"{from_year}_" + cid.split("_", 1)[1]
+                if oid not in other.pos:
+                    counts["no_data"] += 1
+                    feats.append(self.index.feature(i, cell=cell, change="no_data", from_year=from_year))
+                    continue
+                j = other.pos[oid]
+                sim = float(self.index.cells(i)[cell] @ other.cells(j)[cell])
+                col_now = col_then = None
+                if rule:
+                    ps = _cell_patches(cell, self.index.grid)
+                    now = np.asarray(Image.open(io.BytesIO(self.index.thumb_jpeg(i))).convert("RGB"))
+                    then = np.asarray(Image.open(io.BytesIO(other.thumb_jpeg(j))).convert("RGB"))
+                    col_now = float(colour_patches(now, rule).reshape(-1)[ps].max())
+                    col_then = float(colour_patches(then, rule).reshape(-1)[ps].max())
+                if rule and col_now is not None:
+                    if sim >= th["sim_existing_min"] or (col_now > 0 and col_then >= th["colour_then_keep"] * col_now):
+                        change = "existing"
+                    elif col_now >= th["colour_now_min"] and sim <= th["sim_new_max"]:
+                        change = "new"
+                    else:
+                        change = "unsure"
+                else:
+                    change = "new" if sim <= th["sim_new_max"] else "existing" if sim >= th["sim_existing_min"] else "unsure"
+                counts[change] += 1
+                feats.append(self.index.feature(i, cell=cell, change=change, from_year=from_year,
+                                                change_sim=round(sim, 3),
+                                                colour_now=None if col_now is None else round(col_now, 3),
+                                                colour_then=None if col_then is None else round(col_then, 3),
+                                                thumb_url_then=f"/api/v1/chips/{oid}.jpg?year={from_year}"))
+        return self._env(tool, status=self._status(), result=Result(geojson=feature_collection(feats), metrics={
+            **counts, "from_year": from_year, "to_year": self.year, "concept": concept}),
+            method=(f"Same 16.8 m cell in NAIP {from_year} vs {self.year} (fixed EPSG:32617 grid, shared PCA basis): DINOv2 "
+                    "cell cosine" + ("; concept colour fraction then vs now (HSV range from conf/concepts.json)" if rule else "")
+                    + f"; thresholds {th}"),
+            assumptions=[f"The {from_year} and {self.year} orthoimages are co-registered to within ~1–2 m"],
+            limits=self._limits() + [
+                f"NAIP {from_year} and {self.year} differ in season, sun angle and colour balance; covered or drained pools look 'not a pool'",
+                "'new' means the concept's appearance is present now and absent then in this cell, not a permit or construction date",
+                "unsure = signals disagree; treat as needing a look"], steps=t.steps)
 
     # ------------------------------------------------------------------ refine
     def refine(self, session_id: str | None, accept_ids: Sequence[str] = (), reject_ids: Sequence[str] = (),

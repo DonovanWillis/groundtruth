@@ -73,12 +73,17 @@ def main() -> None:
     rf = call("refine", {**common, "accept": [ex, f"{hits[0]['id']}#{hits[0]['properties']['cell']}"],
                          "reject": [neg, f"{hits[-1]['id']}#{hits[-1]['properties']['cell']}"], "k": 12})
     call("outline", {**common, "examples": [ex]})
+    fa = call("find_all", {**common, "examples": [ex], "exclude": [neg], "concept": "swimming_pool", "k": 60,
+                           "outline_top": 12})
+    call("compare_years", {**common, "examples": [f["id"] for f in fa["result"]["geojson"]["features"][:12]],
+                           "from_year": 2020, "concept": "swimming_pool"})
     cells = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "id": h["id"], "properties": {"score": h["properties"]["score"]},
          "geometry": {"type": "Polygon", "coordinates": [[[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]], [b[0], b[1]]]]}}
         for h in hits[:5] for b in [h["properties"]["cell_bbox"]]]}
     call("measure", {**common, "geojson": cells})
-    call("filter", {**common, "geojson": cells, "where": {"min_score": 0.5, "max_area_acres": 1.0}})
+    call("filter", {**common, "geojson": cells, "where": {"within_m_of": {"layer": "osm_i485", "m": 1500},
+                                                           "max_area_acres": 1.0}})
     call("export", {**common, "geojson": cells, "format": "csv"})
     layers = c.get("/api/v1/layers").json()
     name = "fema_flood_zones" if "fema_flood_zones" in layers else (layers[0] if layers else "none")

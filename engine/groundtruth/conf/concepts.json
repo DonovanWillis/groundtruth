@@ -1,6 +1,9 @@
 {
   "_doc": "Per-concept settings (no code changes needed). rerank.colour: HSV range (H in degrees 0-360, S and V 0-255) whose pixel fraction per 14 px patch is blended into the re-rank score with rerank.colour_weight; patch_weight scales DINOv2 patch similarity. count_conf: confidence threshold for counting a result as a detected object.",
-  "_default": {"rerank": {"patch_weight": 1.0, "colour_weight": 0.0, "colour": null, "pool": 400}, "count_conf": 0.5},
+  "_default": {"rerank": {"patch_weight": 1.0, "colour_weight": 0.0, "colour": null, "pool": 400}, "count_conf": 0.5,
+               "change": {"colour_now_min": 0.15, "colour_then_keep": 0.5,
+                          "sim_new_max": 0.6, "sim_existing_min": 0.72,
+                          "_doc": "Cross-year cell similarity is the primary signal (radiometry differs between NAIP years, so colour then is only supporting evidence). new = colour now >= colour_now_min AND sim <= sim_new_max; existing = sim >= sim_existing_min OR colour then >= colour_then_keep x colour now; else unsure."}},
   "swimming_pool": {
     "rerank": {"patch_weight": 0.6, "colour_weight": 0.4, "colour": {"hsv_lo": [165, 50, 100], "hsv_hi": [210, 255, 255]}, "pool": 400},
     "count_conf": 0.5

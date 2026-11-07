@@ -23,14 +23,14 @@ from groundtruth.index import ChipIndex
 from groundtruth.providers.public import PublicDataProvider
 from groundtruth.tools import NOT_IMPLEMENTED, VERSION, Engine
 
-CONTRACT = "0.2"
+CONTRACT = "0.3"
 app = FastAPI(title="Groundtruth API", version=__version__)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 _provider = PublicDataProvider(download_scenes=False)
 _lock = threading.Lock()
 
 TOOLS = {"search_text": True, "pick_candidates": True, "find_similar": True, "find_all": True, "refine": True,
-         "measure": True, "add_layer": True, "filter": True, "export": True, "outline": True, "compare_years": False}
+         "measure": True, "add_layer": True, "filter": True, "export": True, "outline": True, "compare_years": True}
 
 
 def available_indexes() -> list[dict[str, Any]]:
@@ -107,6 +107,13 @@ class RefineIn(Common):
     k: int = Field(50, ge=1, le=500)
     bbox: list[float] | None = None
     place: str | None = None
+    concept: str | None = None
+
+
+class CompareYearsIn(Common):
+    examples: list[str]
+    from_year: int = 2020
+    to_year: int | None = None
     concept: str | None = None
 
 
@@ -196,6 +203,11 @@ def t_find_similar(b: FindSimilarIn) -> JSONResponse:
 def t_find_all(b: FindAllIn) -> JSONResponse:
     return _env(eng(b.aoi, b.year).find_all(b.examples, b.exclude, k=b.k, bbox=b.bbox, place=b.place,
                                             concept=b.concept, rerank=b.rerank, outline_top=b.outline_top))
+
+
+@app.post("/api/v1/tools/compare_years")
+def t_compare_years(b: CompareYearsIn) -> JSONResponse:
+    return _env(eng(b.aoi, b.to_year or b.year).compare_years(b.examples, from_year=b.from_year, concept=b.concept))
 
 
 @app.post("/api/v1/tools/refine")
