@@ -184,11 +184,11 @@
    },
    "metrics": {
     "count": 12,
-    "session_id": "43bc7fd45394",
+    "session_id": "3ce693b776ff",
     "accepted": 2,
     "rejected": 2,
     "pool_chips": 268,
-    "refine_ms": 71.7
+    "refine_ms": 52.5
    }
   },
   "confidence": null,
@@ -214,22 +214,22 @@
    {
     "phase": "pool",
     "detail": "centroid query \u2192 top 1500 chips",
-    "ms": 22.96
+    "ms": 10.97
    },
    {
     "phase": "fit",
     "detail": "logistic regression: 2 accepted, 2 rejected + background",
-    "ms": 30.97
+    "ms": 17.74
    },
    {
     "phase": "score",
     "detail": "268 chips \u00d7 64 cells",
-    "ms": 17.78
+    "ms": 23.78
    }
   ],
   "declined_reason": null,
   "_fixture": {
-   "truncated_features": 9
+   "truncated_features": 0
   }
  }
 }

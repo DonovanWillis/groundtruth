@@ -262,27 +262,27 @@
    {
     "phase": "embed_query",
     "detail": "raw query + 6 sense prompts (swimming_pool)",
-    "ms": 464.44
+    "ms": 439.19
    },
    {
     "phase": "candidate_pool",
     "detail": "top 200 raw + top 40 per sense",
-    "ms": 5.3
+    "ms": 3.55
    },
    {
     "phase": "pick",
     "detail": "one per sense, DINOv2 cell diversity cos<0.8",
-    "ms": 1.53
+    "ms": 1.58
    },
    {
     "phase": "localise",
     "detail": "OpenCLIP on 16 context crops \u00d7 6 tiles (sense-specific)",
-    "ms": 38450.86
+    "ms": 40377.71
    }
   ],
   "declined_reason": null,
   "_fixture": {
-   "truncated_features": 3
+   "truncated_features": 0
   }
  }
 }

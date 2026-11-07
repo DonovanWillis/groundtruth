@@ -71,6 +71,9 @@ built, otherwise the largest indexed slice).
 | `outline` | 🚧 `declined: not_implemented` in v0.1 | `{examples: [id with #cell], max?: int=12}` | planned: SAM 2 polygons per hit (`area_m2, area_acres`), lazily computed and cached by `chip#cell` |
 
 ## Changelog
+- **v0.1.1 (2026-11-07)**: fixtures only, no API change. `add_layer.json` shrank from 1.67 M lines (raw FEMA geometry)
+  to 7 KB. Fixture geometries are simplified for readability (`_fixture.geometry_simplified_deg`). `add_layer` serves
+  the simplified web build of heavy layers by default (FEMA: regulatory 1% + 0.2% zones, ~3 m simplification).
 - **v0.1 (2026-11-07)**: first published contract.
   - Envelope as above; routes `/api/v1/tools/{tool}`, `/health`, `/tools`, `/chips`, `/layers`; `/events` reserved.
   - Ids `chip_id` and `chip_id#cell` on an 8×8 cell grid (index format v3, `chips224s192-g0.6-v3c8p192`).

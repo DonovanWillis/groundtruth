@@ -317,12 +317,12 @@
    {
     "phase": "filter",
     "detail": "5 features",
-    "ms": 2.37
+    "ms": 2.51
    }
   ],
   "declined_reason": null,
   "_fixture": {
-   "truncated_features": 2
+   "truncated_features": 0
   }
  }
 }

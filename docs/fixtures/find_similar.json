@@ -209,22 +209,22 @@
    {
     "phase": "query_vector",
     "detail": "1 positive cells, 1 negative cells, \u03bb=0.5",
-    "ms": 0.17
+    "ms": 0.18
    },
    {
     "phase": "search",
     "detail": "best-matching cell over 17408 cells",
-    "ms": 28.57
+    "ms": 32.24
    },
    {
     "phase": "dedupe",
     "detail": "cell NMS (overlapping chips)",
-    "ms": 0.12
+    "ms": 0.13
    }
   ],
   "declined_reason": null,
   "_fixture": {
-   "truncated_features": 9
+   "truncated_features": 0
   }
  }
 }
