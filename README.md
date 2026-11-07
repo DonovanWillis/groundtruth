@@ -49,3 +49,4 @@ There is no save button. Unsaved clicks are kept in the browser and retried if t
 
 ## Disclosure
 Monish also builds ORYN, a geospatial platform; Groundtruth was built new at CrownHacks and will be integrated into ORYN afterwards.
+Groundtruth reuses pre-existing data caches and helper code from ORYN, Monish's geospatial platform (listed in docs/PRIOR_WORK.md). The engine, pick-what-you-meant flow, live learning, labelling tool and agent were built at CrownHacks.
