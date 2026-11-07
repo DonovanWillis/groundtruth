@@ -145,10 +145,11 @@ async function api(path, opts = {}) {
 // ---------------- map ----------------
 const map = new maplibregl.Map({
   container: "map",
-  style: { version: 8, sources: {}, layers: [{ id: "bg", type: "background", paint: { "background-color": "#0b0d10" } }],
-           glyphs: undefined },
+  style: { version: 8, sources: {}, layers: [{ id: "bg", type: "background", paint: { "background-color": "#0b0d10" } }] },
   center: [-80.7335, 35.3070], zoom: 16, maxZoom: 20, minZoom: 9, hash: true, attributionControl: false,
 });
+window.addEventListener("error", (ev) => setStatus(`page error: ${ev.message}`, "bad"));
+map.on("error", (ev) => { console.error(ev.error); if (!String(ev.error && ev.error.message).includes("tile")) setStatus(`map error: ${ev.error && ev.error.message}`, "bad"); });
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "bottom-right");
 map.addControl(new maplibregl.ScaleControl({ unit: "imperial" }), "bottom-right");
 map.addControl(new maplibregl.AttributionControl({ compact: true,
@@ -215,6 +216,7 @@ function redraw() {
 
 // ---------------- UI ----------------
 function renderConcepts() {
+  if (!CFG) return;
   const html = CFG.concepts.map((c, i) => {
     const m = CONCEPT_META[c], n = counts[c] || { true_match: 0, look_alike: 0 };
     const pt = pending.filter(p => p.concept === c && p.kind === "true_match").length;
@@ -348,15 +350,38 @@ map.on("click", (ev) => {
 });
 window.addEventListener("beforeunload", (ev) => { if (pending.length) { ev.preventDefault(); ev.returnValue = ""; } });
 
+// Boot: config first (concepts render immediately), then map layers. The map's "load" event can fire before
+// the config request returns (the style is inline), so never rely on catching it after an await.
 (async () => {
-  CFG = await api("/api/config");
-  map.on("load", async () => {
-    addLayers();
-    setYear(CFG.primary_year);
-    await loadLabels();
-    setStatus(`ready · ${labels.length} labels on disk`, "ok");
-    if (pending.length) queueFlush();
-  });
+  try {
+    CFG = await api("/api/config");
+  } catch (e) {
+    setStatus(`cannot reach the label server: ${e}`, "bad");
+    return;
+  }
+  renderConcepts();
+  setStatus("loading map…", "warn");
+  let booted = false;
+  const boot = async () => {
+    if (booted) return; booted = true;
+    try {
+      addLayers();
+      setYear(CFG.primary_year);
+      await loadLabels();
+      setStatus(`ready · ${labels.length} labels on disk`, "ok");
+      if (pending.length) queueFlush();
+    } catch (e) {
+      setStatus(`map setup failed: ${e}`, "bad");
+      console.error(e);
+    }
+  };
+  if (map.loaded()) boot(); else { map.once("load", boot); setTimeout(() => { if (map.isStyleLoaded()) boot(); }, 1500); }
+  setTimeout(() => {
+    if (!booted) {
+      const gl = document.createElement("canvas").getContext("webgl2") || document.createElement("canvas").getContext("webgl");
+      setStatus(`map did not start · style=${map.isStyleLoaded()} loaded=${map.loaded()} webgl=${!!gl} · try a hard refresh (Ctrl+F5)`, "bad");
+    }
+  }, 4000);
 })();
 </script>
 </body>
