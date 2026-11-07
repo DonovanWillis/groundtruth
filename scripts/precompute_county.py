@@ -1,0 +1,183 @@
+"""Chip + embed + index an AOI (or the whole county) for one NAIP year. Resumable, retrying, logs throughput.
+
+  python scripts/precompute_county.py --aoi unc_charlotte --year 2022
+  python scripts/precompute_county.py --aoi county --year 2022            # full Mecklenburg
+  GROUNDTRUTH_DEVICE=cuda python scripts/precompute_county.py --aoi county --year 2020   # on a GPU box
+
+Work unit = one NAIP scene: download COG (prefetched in a thread), warp chips onto the EPSG:32617 grid, embed
+with DINOv2 + OpenCLIP, write shards/<scene>.parquet atomically. Finished scenes are skipped on restart.
+Then `--index` (automatic at the end) concatenates shards → chips.parquet, dino.npy, clip.npy, *.faiss.
+"""
+
+from __future__ import annotations
+
+import argparse
+import concurrent.futures as cf
+import io
+import json
+import logging
+import os
+import sys
+import time
+from collections import defaultdict
+from pathlib import Path
+
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+from PIL import Image
+from shapely.geometry import box, shape
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "engine"))
+from groundtruth import config  # noqa: E402
+from groundtruth.geo import to_measure  # noqa: E402
+from groundtruth.providers.public import PublicDataProvider  # noqa: E402
+from groundtruth.tiler import assign_scenes, chips_for_area  # noqa: E402
+
+log = logging.getLogger("precompute")
+MIN_VALID = 0.5
+
+
+def aoi_geometry(provider: PublicDataProvider, aoi: str):
+    if aoi == "county":
+        return shape(provider.get_boundary()["geometry"])
+    return box(*config.AOIS[aoi])
+
+
+def plan(provider: PublicDataProvider, aoi: str, year: int):
+    g = aoi_geometry(provider, aoi)
+    chips = chips_for_area(to_measure(g), year)
+    chips = assign_scenes(chips, provider.scene_footprints_m(g.bounds, year))
+    by_scene = defaultdict(list)
+    for c in chips:
+        by_scene[c.scene_id].append(c)
+    return dict(sorted(by_scene.items()))
+
+
+def process_scene(provider, sid, chips, year, dino, clip, batch):
+    x0 = min(c.x0_m for c in chips); y0 = min(c.y0_m for c in chips)
+    x1 = max(c.x1_m for c in chips); y1 = max(c.y1_m for c in chips)
+    t0 = time.perf_counter()
+    im = provider.read_grid((x0, y0, x1, y1), year, scene_ids=[sid])
+    t_read = time.perf_counter() - t0
+    g = config.GSD_M
+    arrs, keep, valid_fracs = [], [], []
+    for c in chips:
+        ci, ri = int(round((c.x0_m - x0) / g)), int(round((y1 - c.y1_m) / g))
+        a = im.rgb[ri : ri + config.CHIP_PX, ci : ci + config.CHIP_PX]
+        v = float(im.meta["valid"][ri : ri + config.CHIP_PX, ci : ci + config.CHIP_PX].mean())
+        if a.shape[:2] != (config.CHIP_PX, config.CHIP_PX) or v < MIN_VALID:
+            continue
+        arrs.append(a); keep.append(c); valid_fracs.append(v)
+    if not keep:
+        return None, {"read_s": t_read, "embed_s": 0.0, "n": 0}
+    X = np.stack(arrs)
+    t1 = time.perf_counter()
+    d = dino.embed_images(X, batch=batch).astype(np.float16)
+    k = clip.embed_images(X, batch=batch).astype(np.float16)
+    t_emb = time.perf_counter() - t1
+    jpegs = []
+    for a in arrs:
+        b = io.BytesIO(); Image.fromarray(a).save(b, format="JPEG", quality=88); jpegs.append(b.getvalue())
+    bbs = [c.bbox_wgs84() for c in keep]
+    table = pa.table({
+        "chip_id": [c.chip_id for c in keep], "year": [year] * len(keep), "scene_id": [sid] * len(keep),
+        "col": [c.col for c in keep], "row": [c.row for c in keep],
+        "x0_m": [c.x0_m for c in keep], "y0_m": [c.y0_m for c in keep],
+        "west": [b[0] for b in bbs], "south": [b[1] for b in bbs], "east": [b[2] for b in bbs],
+        "north": [b[3] for b in bbs], "valid_frac": valid_fracs, "jpeg": jpegs,
+        "dino": pa.FixedSizeListArray.from_arrays(pa.array(d.ravel()), d.shape[1]),
+        "clip": pa.FixedSizeListArray.from_arrays(pa.array(k.ravel()), k.shape[1]),
+    })
+    return table, {"read_s": t_read, "embed_s": t_emb, "n": len(keep)}
+
+
+def build_index(out: Path) -> None:
+    import faiss
+
+    shards = sorted((out / "shards").glob("*.parquet"))
+    tables = [pq.read_table(s) for s in shards]
+    t = pa.concat_tables(tables).sort_by("chip_id")
+    meta = t.drop_columns(["jpeg", "dino", "clip"])
+    pq.write_table(meta, out / "chips.parquet")
+    for col in ("dino", "clip"):
+        dim = t.schema.field(col).type.list_size
+        X = np.asarray(t.column(col).combine_chunks().flatten(), dtype=np.float32).reshape(-1, dim)
+        X /= np.clip(np.linalg.norm(X, axis=1, keepdims=True), 1e-12, None)
+        np.save(out / f"{col}.npy", X.astype(np.float16))
+        idx = faiss.IndexFlatIP(dim); idx.add(X)
+        faiss.write_index(idx, str(out / f"{col}.faiss"))
+    # thumbnails as one id-sorted jpeg pack (offsets in chips.parquet order)
+    blobs = t.column("jpeg").to_pylist()
+    offs = np.cumsum([0] + [len(b) for b in blobs]).astype(np.int64)
+    with open(out / "thumbs.bin", "wb") as f:
+        for b in blobs:
+            f.write(b)
+    np.save(out / "thumbs_offsets.npy", offs)
+    (out / "index.json").write_text(json.dumps({
+        "index_version": config.INDEX_VERSION, "chips": t.num_rows, "shards": len(shards),
+        "built": time.strftime("%Y-%m-%dT%H:%M:%S%z")}, indent=2))
+    log.info("index built: %d chips from %d shards → %s", t.num_rows, len(shards), out)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--aoi", default="unc_charlotte")
+    ap.add_argument("--year", type=int, default=None)
+    ap.add_argument("--batch", type=int, default=32)
+    ap.add_argument("--plan-only", action="store_true")
+    ap.add_argument("--index-only", action="store_true")
+    ap.add_argument("--keep-cogs", action="store_true", help="keep downloaded COGs (default: delete after use)")
+    a = ap.parse_args()
+    provider = PublicDataProvider()
+    year = a.year or provider.primary_year
+    out = config.precompute_dir(year, a.aoi)
+    (out / "shards").mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s",
+                        handlers=[logging.StreamHandler(), logging.FileHandler(out / "precompute.log")])
+    if a.index_only:
+        return build_index(out)
+    scenes = plan(provider, a.aoi, year)
+    total = sum(len(v) for v in scenes.values())
+    log.info("plan: aoi=%s year=%d scenes=%d chips=%d", a.aoi, year, len(scenes), total)
+    (out / "plan.json").write_text(json.dumps({s: len(c) for s, c in scenes.items()}, indent=1))
+    if a.plan_only:
+        return
+    from groundtruth.embed import ClipEmbedder, DinoEmbedder
+
+    dino, clip = DinoEmbedder(), ClipEmbedder()
+    log.info("device=%s threads=%s", dino.device, os.environ.get("GROUNDTRUTH_THREADS", "default"))
+    todo = [s for s in scenes if not (out / "shards" / f"{s}.parquet").exists()]
+    pool = cf.ThreadPoolExecutor(1)
+    fut = {s: pool.submit(provider.ensure_local, s, year) for s in todo[:1]}
+    done_n, t_start = 0, time.perf_counter()
+    for i, sid in enumerate(todo):
+        if i + 1 < len(todo):  # prefetch next scene while embedding this one
+            fut[todo[i + 1]] = pool.submit(provider.ensure_local, todo[i + 1], year)
+        for attempt in range(3):
+            try:
+                fut[sid].result()
+                table, st = process_scene(provider, sid, scenes[sid], year, dino, clip, a.batch)
+                break
+            except Exception as e:
+                log.warning("scene %s attempt %d failed: %s", sid, attempt + 1, e)
+                provider.local_scene_path(sid, year).unlink(missing_ok=True)
+                fut[sid] = pool.submit(provider.ensure_local, sid, year)
+        else:
+            log.error("scene %s skipped after retries", sid); continue
+        if table is not None:
+            tmp = out / "shards" / f"{sid}.parquet.tmp"
+            pq.write_table(table, tmp); os.replace(tmp, out / "shards" / f"{sid}.parquet")
+        if not a.keep_cogs:
+            provider.local_scene_path(sid, year).unlink(missing_ok=True)
+        done_n += st["n"]
+        el = time.perf_counter() - t_start
+        log.info("scene %d/%d %s: %d chips read %.1fs embed %.1fs (%.1f chips/s embed) | overall %.2f chips/s, "
+                 "eta %.0f min", i + 1, len(todo), sid, st["n"], st["read_s"], st["embed_s"],
+                 st["n"] / max(st["embed_s"], 1e-6), done_n / el,
+                 (total - done_n) / max(done_n / el, 1e-6) / 60)
+    build_index(out)
+
+
+if __name__ == "__main__":
+    main()

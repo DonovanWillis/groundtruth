@@ -1,0 +1,256 @@
+"""PublicDataProvider: public data only (Census, USDA NAIP via Planetary Computer, OSM, FEMA, Overture).
+
+Imagery is read straight from NAIP Cloud-Optimised GeoTIFFs with signed Planetary Computer URLs
+(anonymous SAS tokens; no API key), warped onto the engine's EPSG:32617 grid.
+Vector layers are read from local extracts in ``data/layers`` produced by ``scripts/fetch_layers.py``.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from functools import cached_property
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import planetary_computer
+import rasterio
+from rasterio.enums import Resampling
+from rasterio.transform import from_origin
+from rasterio.vrt import WarpedVRT
+from shapely.geometry import box, mapping, shape
+
+from groundtruth import config
+from groundtruth.envelope import Source
+from groundtruth.geo import MEASURE_CRS, bbox_intersects, to_measure, to_wgs84
+from groundtruth.providers.base import BBox, DataProvider, Imagery, ImageryScene, TileSource
+
+GDAL_ENV: dict[str, Any] = {
+    "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
+    "GDAL_HTTP_MULTIRANGE": "YES",
+    "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES": "YES",
+    "GDAL_HTTP_MAX_RETRY": 4,
+    "GDAL_HTTP_RETRY_DELAY": 1,
+    "VSI_CACHE": True,
+    "VSI_CACHE_SIZE": 256 * 1024 * 1024,
+    "GDAL_CACHEMAX": 512,
+}
+
+NAIP_LICENCE = "Public domain (USDA FSA NAIP); hosted by Microsoft Planetary Computer (PC Terms of Use)"
+
+
+class PublicDataProvider(DataProvider):
+    name = "public"
+
+    def __init__(self, data_dir: Path | None = None, *, download_scenes: bool = True,
+                 cog_cache: Path | None = None) -> None:
+        self.data = Path(data_dir or config.DATA)
+        self.download_scenes = download_scenes
+        self.cog_cache = Path(cog_cache or os.environ.get("GROUNDTRUTH_COG_CACHE")
+                              or Path.home() / ".cache" / "groundtruth" / "naip")
+
+    # ---------- boundary + coverage ----------
+    @cached_property
+    def _boundary(self) -> dict[str, Any]:
+        return json.loads((self.data / "boundary" / "mecklenburg.geojson").read_text())
+
+    @cached_property
+    def _coverage(self) -> dict[str, Any]:
+        return json.loads((self.data / "naip" / "coverage.json").read_text())
+
+    def get_boundary(self) -> dict[str, Any]:
+        return self._boundary
+
+    def imagery_years(self) -> list[int]:
+        return list(self._coverage["full_years"])
+
+    @property
+    def primary_year(self) -> int:
+        return int(self._coverage["primary_year"])
+
+    # ---------- scenes ----------
+    def _items(self, year: int) -> list[dict[str, Any]]:
+        p = self.data / "naip" / f"items_{year}.json"
+        if not p.exists():
+            raise FileNotFoundError(f"{p} missing: run scripts/fetch_boundary_naip.py")
+        return json.loads(p.read_text())
+
+    def list_scenes(self, bbox: BBox, year: int) -> list[ImageryScene]:
+        out = []
+        for it in self._items(year):
+            if bbox_intersects(tuple(it["bbox"]), bbox):
+                out.append(ImageryScene(it["scene_id"], year, tuple(it["bbox"]), it["gsd_m"], it["href"],
+                                        it.get("geometry")))
+        # priority: newest acquisition first, then id (deterministic)
+        dt = {it["scene_id"]: it.get("datetime", "") for it in self._items(year)}
+        out.sort(key=lambda s: (dt.get(s.scene_id, ""), s.scene_id), reverse=True)
+        return out
+
+    def scene_footprints_m(self, bbox: BBox, year: int) -> list[tuple[str, Any]]:
+        """(scene_id, footprint polygon in EPSG:32617) in priority order."""
+        out = []
+        for s in self.list_scenes(bbox, year):
+            g = shape(s.geometry) if s.geometry else box(*s.bbox)
+            out.append((s.scene_id, to_measure(g)))
+        return out
+
+    def _href(self, scene_id: str, year: int) -> str:
+        for it in self._items(year):
+            if it["scene_id"] == scene_id:
+                return it["href"]
+        raise KeyError(scene_id)
+
+    # ---------- pixels ----------
+    def read_grid(self, bounds_m: tuple[float, float, float, float], year: int, *, gsd_m: float = config.GSD_M,
+                  scene_ids: list[str] | None = None, bands: tuple[int, ...] = (1, 2, 3),
+                  retries: int = 3) -> Imagery:
+        """Pixels exactly aligned to ``bounds_m`` (EPSG:32617) at ``gsd_m``. Scenes are composited in priority
+        order (first valid pixel wins). Returns uint8 (H, W, len(bands)) and a ``valid`` mask in meta."""
+        x0, y0, x1, y1 = bounds_m
+        width, height = int(round((x1 - x0) / gsd_m)), int(round((y1 - y0) / gsd_m))
+        dst_transform = from_origin(x0, y1, gsd_m, gsd_m)
+        if scene_ids is None:
+            bb = to_wgs84(box(*bounds_m)).bounds
+            scene_ids = [s.scene_id for s in self.list_scenes(bb, year)]
+        out = np.zeros((height, width, len(bands)), dtype=np.uint8)
+        valid = np.zeros((height, width), dtype=bool)
+        used = []
+        for sid in scene_ids:
+            if valid.all():
+                break
+            arr, mask = self._read_scene_window(sid, year, dst_transform, width, height, bands, retries)
+            fill = mask & ~valid
+            if fill.any():
+                out[fill] = arr[fill]
+                valid |= fill
+                used.append(sid)
+        bbox_wgs = tuple(to_wgs84(box(*bounds_m)).bounds)
+        return Imagery(rgb=out, transform=dst_transform, crs=MEASURE_CRS, year=year, scene_ids=used,
+                       bbox=bbox_wgs, meta={"valid": valid, "gsd_m": gsd_m})
+
+    # ---------- local COG cache (whole-scene download is ~20x faster than remote windowed reads) ----------
+    def local_scene_path(self, sid: str, year: int) -> Path:
+        return self.cog_cache / str(year) / f"{sid}.tif"
+
+    def ensure_local(self, sid: str, year: int, *, streams: int = 16, retries: int = 4) -> Path:
+        """Download one scene COG with parallel HTTP range requests (atomic; resumable per scene)."""
+        dst = self.local_scene_path(sid, year)
+        if dst.exists():
+            return dst
+        import concurrent.futures as cf
+
+        import httpx
+
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        part = dst.with_suffix(".part")
+        url = planetary_computer.sign(self._href(sid, year))
+        with httpx.Client(timeout=120) as c:
+            size = int(c.head(url).headers["content-length"])
+        chunk = max(8 << 20, -(-size // streams))
+        ranges = [(s, min(s + chunk, size) - 1) for s in range(0, size, chunk)]
+        with open(part, "wb") as f:
+            f.truncate(size)
+
+        def fetch(r: tuple[int, int]) -> int:
+            for attempt in range(retries):
+                try:
+                    with httpx.Client(timeout=300) as c:
+                        resp = c.get(url, headers={"Range": f"bytes={r[0]}-{r[1]}"})
+                        resp.raise_for_status()
+                        body = resp.content
+                    if len(body) != r[1] - r[0] + 1:
+                        raise IOError("short read")
+                    with open(part, "r+b") as f:
+                        f.seek(r[0])
+                        f.write(body)
+                    return len(body)
+                except Exception:
+                    if attempt == retries - 1:
+                        raise
+                    time.sleep(2 * (attempt + 1))
+            return 0
+
+        with cf.ThreadPoolExecutor(streams) as ex:
+            total = sum(ex.map(fetch, ranges))
+        if total != size:
+            raise IOError(f"{sid}: got {total} of {size} bytes")
+        os.replace(part, dst)
+        return dst
+
+    def _open_url(self, sid: str, year: int) -> str:
+        local = self.local_scene_path(sid, year)
+        if local.exists():
+            return str(local)
+        if self.download_scenes:
+            return str(self.ensure_local(sid, year))
+        return planetary_computer.sign(self._href(sid, year))
+
+    def _read_scene_window(self, sid: str, year: int, dst_transform, width: int, height: int,
+                           bands: tuple[int, ...], retries: int) -> tuple[np.ndarray, np.ndarray]:
+        err: Exception | None = None
+        for attempt in range(retries):
+            try:
+                url = self._open_url(sid, year)
+                with rasterio.Env(**GDAL_ENV), rasterio.open(url) as src:
+                    with WarpedVRT(src, crs=MEASURE_CRS, transform=dst_transform, width=width, height=height,
+                                   resampling=Resampling.bilinear, nodata=0) as vrt:
+                        data = vrt.read(indexes=list(bands))  # (B, H, W)
+                        m = vrt.read_masks(1) > 0
+                return np.transpose(data, (1, 2, 0)), m
+            except Exception as e:  # network / SAS expiry: retry with a fresh signature
+                err = e
+                time.sleep(1.5 * (attempt + 1))
+        raise RuntimeError(f"failed to read {sid} after {retries} attempts: {err}")
+
+    def get_imagery(self, bbox: BBox, year: int, *, gsd_m: float | None = None) -> Imagery:
+        g = gsd_m or config.GSD_M
+        bx = to_measure(box(*bbox)).bounds
+        # snap outward to the pixel grid
+        x0 = np.floor(bx[0] / g) * g
+        y0 = np.floor(bx[1] / g) * g
+        x1 = np.ceil(bx[2] / g) * g
+        y1 = np.ceil(bx[3] / g) * g
+        return self.read_grid((x0, y0, x1, y1), year, gsd_m=g)
+
+    def get_tiles(self, year: int) -> TileSource:
+        return TileSource(url_template=f"/api/tiles/naip/{year}/{{z}}/{{x}}/{{y}}.png",
+                          attribution="USDA NAIP (public domain) via Microsoft Planetary Computer", year=year,
+                          min_zoom=10, max_zoom=18)
+
+    # ---------- vector layers ----------
+    def layer_names(self) -> list[str]:
+        d = self.data / "layers"
+        return sorted(p.stem for p in d.glob("*.geojson")) if d.exists() else []
+
+    def get_layer(self, name: str, bbox: BBox | None = None) -> dict[str, Any]:
+        p = self.data / "layers" / f"{name}.geojson"
+        if not p.exists():
+            raise KeyError(f"unknown layer {name!r}; available: {self.layer_names()}")
+        fc = json.loads(p.read_text())
+        if bbox is None:
+            return fc
+        q = box(*bbox)
+        feats = [f for f in fc["features"] if f.get("geometry") and shape(f["geometry"]).intersects(q)]
+        return {"type": "FeatureCollection", "features": feats}
+
+    # ---------- provenance ----------
+    def sources(self) -> list[Source]:
+        cov = self._coverage
+        out = [
+            Source(name="US Census TIGERweb county boundary (Mecklenburg, GEOID 37119)",
+                   url="https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/1",
+                   date=cov.get("checked", ""), licence="Public domain (US Government work)"),
+        ]
+        for y in cov["full_years"]:
+            v = cov["years"][str(y)] if str(y) in cov["years"] else cov["years"][y]
+            out.append(Source(name=f"USDA NAIP {y}", url="https://planetarycomputer.microsoft.com/dataset/naip",
+                              date=f"{v['date_min']}/{v['date_max']}", licence=NAIP_LICENCE))
+        meta = self.data / "layers" / "_sources.json"
+        if meta.exists():
+            out += [Source(**s) for s in json.loads(meta.read_text())]
+        return out
+
+    def naip_source(self, year: int) -> Source:
+        return next(s for s in self.sources() if s.name == f"USDA NAIP {year}")
