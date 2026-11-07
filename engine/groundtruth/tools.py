@@ -441,25 +441,39 @@ class Engine:
             if self._outliner is None:
                 self._outliner = Outliner()
             self._queue: "queue.Queue[tuple[int, int]]" = queue.Queue()
-            self._outline_lock = threading.Lock()
+            self._queued: set[tuple[int, int]] = set()
+            self._busy = 0  # >0 while a search request runs: the outline worker yields the GPU
 
             def run() -> None:
                 while True:
                     i, c = self._queue.get()
+                    while self._busy > 0:
+                        time.sleep(0.05)
                     try:
                         self._outliner.outline(self.index, i, c)  # thread-safe, cached
                     except Exception:
                         pass
+                    finally:
+                        self._queued.discard((i, c))
 
             self._worker = threading.Thread(target=run, daemon=True, name="outline-worker")
             self._worker.start()
         return self._queue
 
     def _cached_outline(self, i: int, c: int) -> dict[str, Any] | None:
+        """Outline from the in-memory cache, else disk (outlines never change for a given index version)."""
         from groundtruth.outline import Outliner
 
+        mem = self.__dict__.setdefault("_outline_mem", {})
+        key = (i, c)
+        if key in mem:
+            return mem[key]
         p = Outliner._cache_path(self.index.ids[i], c)
-        return json.loads(p.read_text()) if p.exists() else None
+        if not p.exists():
+            return None
+        f = json.loads(p.read_text())
+        mem[key] = f
+        return f
 
     def place_bbox(self, place: str | None) -> list[float] | None:
         if not place:
@@ -481,7 +495,11 @@ class Engine:
             bbox = self.place_bbox(place)
             if bbox is None:
                 return declined(tool, VERSION, f"unknown place {place!r} (see GET /api/v1/places)")
-        base = self.find_similar(examples, exclude, k=k, bbox=bbox, rerank=rerank, concept=concept)
+        self.__dict__["_busy"] = self.__dict__.get("_busy", 0) + 1
+        try:
+            base = self.find_similar(examples, exclude, k=k, bbox=bbox, rerank=rerank, concept=concept)
+        finally:
+            self._busy -= 1
         if base.status == "declined":
             return base.model_copy(update={"tool": tool})
         t = StepTimer()
@@ -506,8 +524,8 @@ class Engine:
                          "geometry_kind": "outline" if ol and ol.get("geometry") else "cell",
                          "area_m2": ol["properties"]["area_m2"] if ol and ol.get("geometry") else None,
                          "area_acres": ol["properties"]["area_acres"] if ol and ol.get("geometry") else None}
-                if q is not None and not ol and r < outline_top:
-                    q.put((i, c)); n_queued += 1
+                if q is not None and not ol and r < outline_top and (i, c) not in self._queued:
+                    self._queued.add((i, c)); q.put((i, c)); n_queued += 1
                 # object dedupe across chip borders: drop if it overlaps an earlier result's outline/cell by >50%
                 g = shape(geom)
                 gm = to_measure(g)

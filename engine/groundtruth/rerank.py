@@ -53,11 +53,29 @@ def colour_patches(rgb: np.ndarray, rule: dict[str, Any] | None) -> np.ndarray:
     """(224,224,3) → (16,16) fraction of pixels inside the HSV range."""
     if not rule:
         return np.zeros((PATCHES, PATCHES), np.float32)
+    p = config.CHIP_PX // PATCHES
+    if rgb.shape[0] == config.CHIP_PX and p % 2 == 0:  # half resolution: 7×7 px per patch is plenty for a fraction
+        rgb, p = rgb[::2, ::2], p // 2
     hsv = _hsv(rgb)
     lo, hi = np.array(rule["hsv_lo"], np.float32), np.array(rule["hsv_hi"], np.float32)
     m = np.all((hsv >= lo) & (hsv <= hi), -1).astype(np.float32)
-    p = config.CHIP_PX // PATCHES
     return m.reshape(PATCHES, p, PATCHES, p).mean((1, 3))
+
+
+_COLOUR: "OrderedDict[tuple, np.ndarray]" = OrderedDict()
+
+
+def colour_cached(key: tuple, rgb: np.ndarray, rule: dict[str, Any] | None) -> np.ndarray:
+    if not rule:
+        return np.zeros((PATCHES, PATCHES), np.float32)
+    k = key + (json.dumps(rule, sort_keys=True),)
+    v = _COLOUR.get(k)
+    if v is None:
+        v = colour_patches(rgb, rule)
+        _COLOUR[k] = v
+        while len(_COLOUR) > 20000:
+            _COLOUR.popitem(last=False)
+    return v
 
 
 class PatchCache:
@@ -80,7 +98,7 @@ class PatchCache:
             self.d.popitem(last=False)
 
 
-_CACHE = PatchCache(int(__import__("os").environ.get("GROUNDTRUTH_PATCH_CACHE", "300")))  # ~0.55 MB per chip
+_CACHE = PatchCache(int(__import__("os").environ.get("GROUNDTRUTH_PATCH_CACHE", "600")))  # ~0.55 MB per chip; ≥ re-rank pool
 
 
 def patch_tokens(index: ChipIndex, rows: Sequence[int], batch: int = 64) -> tuple[np.ndarray, np.ndarray, str]:
@@ -149,8 +167,9 @@ def rerank(index: ChipIndex, positives: Sequence[tuple[int, int]], negatives: Se
     off = len(ex_rows)
     S = T[off:] @ q  # (n, 256)
     out = []
+    root = str(index.root)
     for j, i in enumerate(candidates):
-        col = colour_patches(RGB[off + j], rule).reshape(-1) if rule else np.zeros(PATCHES * PATCHES, np.float32)
+        col = colour_cached((root, int(i)), RGB[off + j], rule).reshape(-1)
         comb = wp * S[j] + wc * col
         p = int(np.argmax(comb))
         pr, pc = divmod(p, PATCHES)

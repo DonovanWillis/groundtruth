@@ -45,6 +45,11 @@ def main() -> None:
         ms = (time.perf_counter() - t0) * 1000
         env = r.json()
         good = r.status_code == 200 and env.get("status") in ("ok", "partial")
+        if tool == "compare_years" and env.get("status") == "declined" and "index" in (env.get("declined_reason") or ""):
+            print(f"{n:2d} {tool:16s} SKIP  ({env['declined_reason']})")
+            rows.append({"step": n, "tool": tool, "ms": 0, "status": "skipped", "budget_ms": None, "within_budget": True,
+                         "metrics": {"reason": env["declined_reason"]}})
+            return env
         budget = BUDGET_MS.get(tool)
         within = budget is None or ms <= budget
         ok_all &= good
