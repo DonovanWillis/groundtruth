@@ -1,11 +1,11 @@
-# Status for Monish (unattended run, started 16:38 ET; updated 17:15)
+# Status for Monish (unattended run, started 16:38 ET; updated 19:00)
 
 ## 1. What you can try right now
-- **Demo UI** (this PC, localhost only): http://localhost:8000/
-  - Hero flow on the residential slice:
-    http://localhost:8000/?aoi=south_charlotte&q=find%20swimming%20pools&pick=backyard_pool&layers=osm_i485
-  - Mock agent run (clearly labelled MOCK; real tool calls): http://localhost:8000/?aoi=south_charlotte&agent=mock&tab=agent
-  - When the county index lands (~18:40) the UI switches to it automatically (prefers aoi "county").
+- **Demo UI on the whole county** (this PC, localhost only): http://localhost:8000/
+  - Hero flow, county, Ballantyne:
+    http://localhost:8000/?q=find%20swimming%20pools%20in%20Ballantyne&pick=backyard_pool&layers=osm_i485,fema_flood_zones
+  - Mock agent run (clearly labelled MOCK; real tool calls): http://localhost:8000/?agent=mock&tab=agent
+  - The very first query after an API restart is cold (~10–17 s while models load); then it's fast.
 - **Labelling page:** http://localhost:8765/label (unchanged, still running).
 - **Hero-flow check:** `wsl.exe -d Ubuntu-24.04 -- bash /mnt/c/Users/orynt/GeoSpatial/Geospatial-SearchEngine/scripts/demo_check.sh`
   prints PASS/FAIL and timings. Add `--record` to refresh the replay fallback.
@@ -16,12 +16,14 @@
 ## 2. Numbers
 | what | number |
 |---|---|
+| **county index 2022** | 107,770 chips, 54/54 scenes, verified · 2020 precompute running (ETA ~20:40) |
+| **county hero flow** (Ballantyne, warm, runs 2–3) | PASS · pick **0.58–0.73 s** · find_all **0.68–0.84 s** · refine **< 0.5 s** · filter 36–40 ms · CSV 13–15 ms · 27 detected, 87 within 1 km of I-485 |
+| **county re-rank** (3 backyard pools, top 24 by eye) | Ballantyne ~5–7 → **~21** · Lake Norman → **~19–21** |
+| **county evaluation** (pools) | search_text P@24 **0.58** · find_all LOO P@24 **0.45** · look-alike rejection **3/5** · OSM recall Ballantyne **16/25** · outline IoU **0.29** (Lake Norman bias) |
 | backyard re-rank, pools in top 24 by eye (south-Charlotte slice) | 1 backyard 5–6 → **~18–20** · 3 backyard 4–5 → **~14–16** (target ≥12 ✓) · community 12–13 → **~17–18** |
 | latency, warm (GPU query-time) | pick **0.8–0.9 s** (was 3.2 s) · find_all **2.1–2.5 s** · refine **45–110 ms** (360–420 ms while 200 SAM outlines run in the background) · filter 55–76 ms · measure 0.65 s · PDF 0.2 s |
 | hero flow (`demo_check.sh`, slice) | PASS ×3; budgets met when warm (pick < 2 s, find_all < 3 s, refine < 1 s); a cold start right after an API restart is over budget, hence the new startup warm-up |
 | compare_years (slice top 24) | 3 new / 20 existing / 1 unsure; the 3 "new" look right by eye |
-| county precompute 2022 | scene 21/51 at 17:14, ~2.6 min/scene, ETA ~18:35; 2020 after that (~20:20) |
-| county evaluation | PENDING (needs the county index) |
 
 ## Resume run (18:44 →): county results
 - **County 2022 index verified:** 54/54 scenes, **107,770 chips**, 11.9 GB, built 18:14. 2020 started automatically at 18:14
@@ -57,10 +59,12 @@
   doesn't). There's also a `next-server` process in WSL that isn't mine; I left it alone.
 
 ## 3. Decisions needed (max 5)
-1. **Tailnet demo access:** run `scripts/tailnet_serve.sh --i-am-monish-and-approve` (`tailscale serve`, tailnet only, port 8000,
-   no Funnel) when you want Don or judges on the tailnet to see it. Prepared, NOT enabled.
-2. **Ping Don:** contract **v0.3.1** is tagged (find_all, compare_years = his request, refine why, outline cached_only).
-   No PRs from him yet.
+1. **ASUS laptop:** WSL has no Linux distro (only Docker's internal `docker-desktop`). Installing Ubuntu in WSL is your call
+   (may need a reboot). Until then the laptop does nothing.
+2. **Tailnet demo access:** run `scripts/tailnet_serve.sh --i-am-monish-and-approve` (`tailscale serve`, tailnet only, port 8000,
+   no Funnel) when you want people on the tailnet to see it. Prepared, NOT enabled.
+3. **Memory during the demo:** with the 2020 precompute + API running, Windows dips to 1–3 GB free. Once 2020 finishes
+   (~20:40) that frees ~5 GB. Consider closing other apps before demoing.
 
 ## Progress
 | item | state | notes |
