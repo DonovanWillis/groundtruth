@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import threading
 import time
 from functools import cached_property
 from typing import Any
@@ -39,17 +40,28 @@ class Outliner:
         model = Sam2Model.from_pretrained(SAM_MODEL).to(self.device).eval()
         return proc, model
 
-    def _cache_path(self, chip_id: str, cell: int):
+    _lock = threading.Lock()
+
+    @staticmethod
+    def _cache_path(chip_id: str, cell: int):
         return config.DATA / "cache" / "outlines" / config.INDEX_VERSION / f"{chip_id}_{cell}.json"
 
     def outline(self, index: ChipIndex, i: int, cell: int, margin_px: int = 8) -> dict[str, Any]:
-        """→ GeoJSON Feature (EPSG:4326) with area_m2/area_acres/sam_score/ms/cached."""
+        """→ GeoJSON Feature (EPSG:4326) with area_m2/area_acres/sam_score/ms/cached. Thread-safe."""
         chip_id = index.ids[i]
         cp = self._cache_path(chip_id, cell)
         if cp.exists():
             f = json.loads(cp.read_text())
             f["properties"]["cached"] = True
             return f
+        with self._lock:
+            if cp.exists():
+                f = json.loads(cp.read_text()); f["properties"]["cached"] = True
+                return f
+            return self._outline_uncached(index, i, cell, margin_px, cp)
+
+    def _outline_uncached(self, index: ChipIndex, i: int, cell: int, margin_px: int, cp) -> dict[str, Any]:
+        chip_id = index.ids[i]
         import torch
         from PIL import Image
 
@@ -95,5 +107,7 @@ class Outliner:
             feat = {"type": "Feature", "id": f"{chip_id}#{cell}", "geometry": mapping(to_wgs84(best)),
                     "properties": {**props, "area_m2": round(area, 2), "area_acres": round(area / SQM_PER_ACRE, 5)}}
         cp.parent.mkdir(parents=True, exist_ok=True)
-        cp.write_text(json.dumps(feat))
+        tmp = cp.with_suffix(".tmp")
+        tmp.write_text(json.dumps(feat))
+        tmp.replace(cp)
         return feat

@@ -73,6 +73,8 @@ class Session:
     reject: list[str] = field(default_factory=list)
     query: str = ""
     created: float = field(default_factory=time.time)
+    pool: list[int] = field(default_factory=list)
+    pool_key: Any = None
 
 
 class Engine:
@@ -379,26 +381,143 @@ class Engine:
             "bbox": list(bbox) if bbox else None}),
             method=method, assumptions=["The example cells show the intended object"], steps=t.steps)
 
+    # ------------------------------------------------------------------ find_all (core product)
+    def _outline_worker(self):
+        if getattr(self, "_worker", None) is None:
+            import queue
+            import threading
+
+            from groundtruth.outline import Outliner
+
+            if self._outliner is None:
+                self._outliner = Outliner()
+            self._queue: "queue.Queue[tuple[int, int]]" = queue.Queue()
+            self._outline_lock = threading.Lock()
+
+            def run() -> None:
+                while True:
+                    i, c = self._queue.get()
+                    try:
+                        self._outliner.outline(self.index, i, c)  # thread-safe, cached
+                    except Exception:
+                        pass
+
+            self._worker = threading.Thread(target=run, daemon=True, name="outline-worker")
+            self._worker.start()
+        return self._queue
+
+    def _cached_outline(self, i: int, c: int) -> dict[str, Any] | None:
+        from groundtruth.outline import Outliner
+
+        p = Outliner._cache_path(self.index.ids[i], c)
+        return json.loads(p.read_text()) if p.exists() else None
+
+    def place_bbox(self, place: str | None) -> list[float] | None:
+        if not place:
+            return None
+        places = json.loads((config.SENSES_PATH.parent / "places.json").read_text())["places"]
+        key = next((k for k in places if k.lower() == place.strip().lower()), None)
+        return places[key]["bbox"] if key else None
+
+    def find_all(self, examples: Sequence[str], exclude: Sequence[str] = (), k: int = 200,
+                 bbox: Sequence[float] | None = None, place: str | None = None, concept: str | None = None,
+                 rerank: bool = True, outline_top: int = 200) -> Envelope:
+        """pick → ranked matches (county or bbox/place) → object dedupe → outlines (cached ones now, the top
+        ``outline_top`` queued in the background, lazily cached by chip#cell) → count / acres / median area."""
+        tool = "find_all"
+        from groundtruth.rerank import concept_conf
+        from shapely.geometry import box as sbox
+
+        if place and not bbox:
+            bbox = self.place_bbox(place)
+            if bbox is None:
+                return declined(tool, VERSION, f"unknown place {place!r} (see GET /api/v1/places)")
+        base = self.find_similar(examples, exclude, k=k, bbox=bbox, rerank=rerank, concept=concept)
+        if base.status == "declined":
+            return base.model_copy(update={"tool": tool})
+        t = StepTimer()
+        t.steps.extend(base.steps)
+        feats = base.result.geojson["features"]
+        conf_cut = float(concept_conf(concept).get("count_conf", 0.5))
+        with t.step("outlines", f"attach cached; queue top {min(outline_top, len(feats))} for SAM 2"):
+            q = self._outline_worker() if outline_top else None
+            scores = [f["properties"]["score"] for f in feats] or [0]
+            s_hi, s_lo = max(scores), min(scores)
+            out, polys = [], []
+            n_queued = 0
+            for r, f in enumerate(feats):
+                p = f["properties"]
+                i, c = self.index.pos[p["chip_id"]], p["cell"]
+                ol = self._cached_outline(i, c)
+                rel = (p["score"] - s_lo) / max(s_hi - s_lo, 1e-6)
+                quality = (0.5 + 0.5 * ol["properties"]["sam_score"]) if ol and ol.get("geometry") else 0.85
+                conf = round(float(np.clip(rel * quality, 0, 1)), 3)
+                geom = ol["geometry"] if ol and ol.get("geometry") else mapping(sbox(*p["cell_bbox"]))
+                props = {**p, "example": f"{p['chip_id']}#{c}", "confidence": conf,
+                         "geometry_kind": "outline" if ol and ol.get("geometry") else "cell",
+                         "area_m2": ol["properties"]["area_m2"] if ol and ol.get("geometry") else None,
+                         "area_acres": ol["properties"]["area_acres"] if ol and ol.get("geometry") else None}
+                if q is not None and not ol and r < outline_top:
+                    q.put((i, c)); n_queued += 1
+                # object dedupe across chip borders: drop if it overlaps an earlier result's outline/cell by >50%
+                g = shape(geom)
+                gm = to_measure(g)
+                if any(gm.intersection(o).area > 0.5 * min(gm.area, o.area) for o in polys):
+                    continue
+                polys.append(gm)
+                out.append({"type": "Feature", "id": props["example"], "geometry": geom, "properties": props})
+        detected = [f for f in out if f["properties"]["confidence"] >= conf_cut]
+        areas = [f["properties"]["area_m2"] for f in detected if f["properties"]["area_m2"]]
+        tot = float(sum(areas))
+        metrics = {"count_detected": len(detected), "count_returned": len(out), "confidence_cut": conf_cut,
+                   "outlined": sum(1 for f in out if f["properties"]["geometry_kind"] == "outline"),
+                   "outlines_queued": n_queued, "area_m2_total": round(tot, 1),
+                   "area_acres_total": round(tot / SQM_PER_ACRE, 3),
+                   "median_area_m2": round(float(np.median(areas)), 1) if areas else None,
+                   "bbox": list(bbox) if bbox else None, "place": place, "concept": concept}
+        limits = self._limits() + [
+            "count = detected objects in the ranked results (top k, confidence ≥ cut), not a census",
+            f"Only the top {k} matches are considered; areas are summed over outlined detections only",
+            "Confidence is a heuristic (relative similarity × outline quality), not a calibrated probability"]
+        return self._env(tool, result=Result(geojson=feature_collection(out), metrics=metrics),
+                         confidence=None, method=base.method + "; object dedupe by outline/cell overlap > 50%; SAM 2.1 "
+                         "outlines prompted by the matching cell (lazy, cached)",
+                         assumptions=base.assumptions, limits=limits, steps=t.steps)
+
     # ------------------------------------------------------------------ refine
     def refine(self, session_id: str | None, accept_ids: Sequence[str] = (), reject_ids: Sequence[str] = (),
-               k: int = 50, pool: int = 1500) -> Envelope:
+               k: int = 50, pool: int = 1500, bbox: Sequence[float] | None = None, place: str | None = None,
+               concept: str | None = None) -> Envelope:
         """Per-session logistic regression on DINOv2 cell vectors (accepted vs rejected + background cells),
-        applied to the cells of a candidate pool retrieved by the centroid query. Target < 1 s."""
+        applied to every cell of a candidate pool (re-ranked find_similar from the accepted examples, within the
+        place/bbox if given). Each hit says why: its nearest accepted example. Target < 1 s (pool cached per session)."""
         from sklearn.linear_model import LogisticRegression
 
         tool = "refine"
         sid = session_id or uuid.uuid4().hex[:12]
         sess = self.sessions.setdefault(sid, Session(sid))
         sess.accept += [a for a in accept_ids if a not in sess.accept]
+        sess.reject = [r for r in sess.reject if r not in accept_ids]
+        sess.accept = [a for a in sess.accept if a not in reject_ids]
         sess.reject += [r for r in reject_ids if r not in sess.reject]
         pos = self._example_cells(sess.accept)
         neg = self._example_cells(sess.reject)
         if not pos:
             return declined(tool, VERSION, "refine needs at least one accepted example")
+        if place and not bbox:
+            bbox = self.place_bbox(place)
         t = StepTimer()
-        with t.step("pool", f"centroid query → top {pool} chips"):
-            skip = {i for i, _ in pos} | {i for i, _ in neg}
-            cand = [i for i, _, _ in self._cell_rank(self._cell_query(pos, neg, 0.5), pool, skip)][:pool]
+        skip = {i for i, _ in pos} | {i for i, _ in neg}
+        key = (tuple(bbox) if bbox else None, concept)
+        with t.step("pool", "candidate chips (cached per session)" if getattr(sess, "pool_key", None) == key
+                    else f"cell search from the first accepted example → {pool} chips"):
+            if getattr(sess, "pool_key", None) != key or not getattr(sess, "pool", None):
+                q = self._cell_query(pos[:1], [], 0.5)
+                rows = self._bbox_rows(bbox)
+                ranked = (self._cell_rank_subset(q, rows, set()) if rows is not None else self._cell_rank(q, pool, set()))
+                sess.pool = [i for i, _, _ in ranked[:pool]]
+                sess.pool_key = key
+            cand = [i for i in sess.pool if i not in skip]
         with t.step("fit", f"logistic regression: {len(pos)} accepted, {len(neg)} rejected + background"):
             rng = np.random.default_rng(0)
             bg_i = rng.choice(len(self.index), size=min(150, len(self.index)), replace=False)
@@ -415,7 +534,15 @@ class Engine:
             ranked = sorted(((cand[j], float(P[j, best_c[j]]), int(best_c[j])) for j in range(len(cand))),
                             key=lambda h: (-round(h[1], 6), self.index.ids[h[0]]))
             hits = self._nms(ranked, k, block=pos + neg)
-        feats = [self.index.feature(i, cell=c, score=round(p, 4), rank=r + 1) for r, (i, p, c) in enumerate(hits)]
+        with t.step("why", "nearest accepted example per hit"):
+            A = np.stack([self.index.cells(i)[c] for i, c in pos])
+            feats = []
+            for r, (i, p, c) in enumerate(hits):
+                sims = A @ self.index.cells(i)[c]
+                j = int(np.argmax(sims))
+                feats.append(self.index.feature(i, cell=c, score=round(p, 4), rank=r + 1, confidence=round(p, 3),
+                                                why={"nearest_accepted": f"{self.index.ids[pos[j][0]]}#{pos[j][1]}",
+                                                     "similarity": round(float(sims[j]), 3)}))
         total_ms = sum(s.ms for s in t.steps)
         return self._env(tool, result=Result(geojson=feature_collection(feats), metrics={
             "count": len(feats), "session_id": sid, "accepted": len(pos), "rejected": len(neg),
@@ -457,37 +584,71 @@ class Engine:
                          limits=self._limits() + ["Outlines from 0.6 m imagery: edges ±1 px (0.6 m)"], steps=t.steps)
 
     # ------------------------------------------------------------------ measure
-    def measure(self, geojson: dict[str, Any], *, to_layer: str | None = None) -> Envelope:
+    def _layer_geom(self, name: str, where: dict[str, Any] | None = None, near: Sequence[dict[str, Any]] | None = None):
+        """Union of a layer in EPSG:32617 (cached). With ``near`` (features), only layer parts within ~5 km of their
+        extent are merged, which keeps big layers (FEMA) fast."""
+        from shapely import make_valid
+        from shapely.ops import unary_union
+
+        cache = self.__dict__.setdefault("_layer_cache", {})
+        clip = None
+        if near:
+            xs = [shape(f["geometry"]).bounds for f in near]
+            clip = box(min(b[0] for b in xs) - 0.05, min(b[1] for b in xs) - 0.05,
+                       max(b[2] for b in xs) + 0.05, max(b[3] for b in xs) + 0.05)
+        key = (name, json.dumps(where or {}, sort_keys=True), tuple(round(v, 2) for v in clip.bounds) if clip else None)
+        if key not in cache:
+            fc = self.provider.get_layer(name, tuple(clip.bounds) if clip else None)
+            gs = [make_valid(shape(f["geometry"])) for f in fc["features"] if f.get("geometry") and
+                  all(f["properties"].get(k) == v for k, v in (where or {}).items())]
+            cache[key] = to_measure(unary_union(gs).buffer(0) if any(g.area for g in gs) else unary_union(gs)) if gs else None
+        return cache[key]
+
+    def measure(self, geojson: dict[str, Any], *, to_layer: str | None = None,
+                to_layers: Sequence[str] = ()) -> Envelope:
+        """Per feature: area_m2, area_acres, perimeter_m, dist_m_to_<layer>. Totals: count, area_acres_total,
+        median_area_m2, min/median dist per layer. Measured in EPSG:32617; geometry I/O in EPSG:4326."""
         tool = "measure"
         feats = geojson.get("features", [])
         if not feats:
             return declined(tool, VERSION, "no features to measure")
+        layers = [l for l in ([to_layer] if to_layer else []) + list(to_layers) if l]
         t = StepTimer()
-        layer_geom = None
-        if to_layer:
-            with t.step("load_layer", to_layer):
-                from shapely.ops import unary_union
-
-                lyr = self.provider.get_layer(to_layer)
-                layer_geom = to_measure(unary_union([shape(f["geometry"]) for f in lyr["features"] if f.get("geometry")]))
-        out, tot_m2 = [], 0.0
+        geoms = {}
+        for l in layers:
+            with t.step("load_layer", l):
+                geoms[l] = self._layer_geom(l, near=feats)
+        out, areas = [], []
+        dists: dict[str, list[float]] = {l: [] for l in layers}
         with t.step("measure", f"{len(feats)} features in EPSG:32617"):
             for f in feats:
                 g = shape(f["geometry"])
                 gm = to_measure(g)
                 p = dict(f.get("properties") or {})
                 p["area_m2"] = round(gm.area, 2)
-                p["area_acres"] = round(gm.area / SQM_PER_ACRE, 4)
+                p["area_acres"] = round(gm.area / SQM_PER_ACRE, 5)
                 p["perimeter_m"] = round(gm.length if gm.geom_type in ("Polygon", "MultiPolygon") else length_m(g), 2)
-                if layer_geom is not None:
-                    p[f"dist_m_to_{to_layer}"] = round(gm.distance(layer_geom), 1)
-                tot_m2 += gm.area
+                for l, lg in geoms.items():
+                    if lg is not None:
+                        d = round(gm.distance(lg), 1)
+                        p[f"dist_m_to_{l}"] = d
+                        dists[l].append(d)
+                areas.append(gm.area)
                 out.append({"type": "Feature", "id": f.get("id"), "geometry": f["geometry"], "properties": p})
-        metrics = {"count": len(out), "area_m2_total": round(tot_m2, 2), "area_acres_total": round(tot_m2 / SQM_PER_ACRE, 4)}
+        tot = float(sum(areas))
+        metrics = {"count": len(out), "area_m2_total": round(tot, 2), "area_acres_total": round(tot / SQM_PER_ACRE, 4),
+                   "median_area_m2": round(float(np.median(areas)), 2)}
+        for l, ds in dists.items():
+            if ds:
+                metrics[f"min_dist_m_to_{l}"] = min(ds)
+                metrics[f"median_dist_m_to_{l}"] = round(float(np.median(ds)), 1)
         return self._env(tool, status="ok", result=Result(geojson=feature_collection(out), metrics=metrics),
                          confidence=1.0, method="Planar measurement after reprojection EPSG:4326 → EPSG:32617 (UTM 17N)",
-                         assumptions=["Input geometry is EPSG:4326"], limits=["UTM 17N distortion < 0.1% in Mecklenburg"],
-                         sources=[], steps=t.steps)
+                         assumptions=["Input geometry is EPSG:4326"],
+                         limits=["UTM 17N distortion < 0.1% in Mecklenburg",
+                                 "Distances are to the simplified web build of a layer when one exists (~3 m)"],
+                         sources=[s for l in layers for s in (self.provider.source_for(
+                             {"osm": "openstreetmap"}.get(l.split("_")[0], l.split("_")[0])))], steps=t.steps)
 
     # ------------------------------------------------------------------ layers
     def add_layer(self, name: str, bbox: Sequence[float] | None = None) -> Envelope:
@@ -505,36 +666,46 @@ class Engine:
                          steps=t.steps)
 
     def filter(self, geojson: dict[str, Any], where: dict[str, Any]) -> Envelope:
-        """``where`` keys (all optional, ANDed): ``intersects_layer`` (+ ``layer_where`` {prop: value}),
-        ``not_intersects_layer``, ``max_dist_m`` + ``dist_layer``, ``min_area_acres``, ``max_area_acres``,
-        ``min_score``."""
+        """``where`` keys (all optional, ANDed):
+        ``within_m_of``: {layer, m} or a list of them (e.g. {"layer": "osm_i485", "m": 1000});
+        ``inside_place``: a name from GET /places (e.g. "Ballantyne");
+        ``intersects_layer`` (+ ``layer_where`` {prop: value}), ``not_intersects_layer``;
+        ``min_area_acres`` / ``max_area_acres`` (uses the feature's area_acres when present, else its geometry);
+        ``min_confidence``, ``min_score``. Legacy: ``dist_layer`` + ``max_dist_m``."""
         tool = "filter"
-        from shapely.ops import unary_union
-
         t = StepTimer()
         feats = geojson.get("features", [])
-
-        def layer_union(name: str, lw: dict[str, Any] | None = None):
-            fc = self.provider.get_layer(name)
-            gs = [shape(f["geometry"]) for f in fc["features"] if f.get("geometry") and
-                  all(f["properties"].get(k) == v for k, v in (lw or {}).items())]
-            return to_measure(unary_union(gs)) if gs else None
-
-        with t.step("prepare", json.dumps(where)[:120]):
-            inter = layer_union(where["intersects_layer"], where.get("layer_where")) if where.get("intersects_layer") else None
-            notinter = layer_union(where["not_intersects_layer"]) if where.get("not_intersects_layer") else None
-            distl = layer_union(where["dist_layer"]) if where.get("dist_layer") else None
+        within = where.get("within_m_of") or []
+        within = [within] if isinstance(within, dict) else list(within)
+        if where.get("dist_layer"):
+            within.append({"layer": where["dist_layer"], "m": float(where.get("max_dist_m", 0))})
+        with t.step("prepare", json.dumps(where)[:160]):
+            try:
+                inter = (self._layer_geom(where["intersects_layer"], where.get("layer_where"), near=feats)
+                         if where.get("intersects_layer") and feats else None)
+                notinter = self._layer_geom(where["not_intersects_layer"], near=feats) if where.get("not_intersects_layer") and feats else None
+                wgeoms = [(w["layer"], float(w["m"]), self._layer_geom(w["layer"], near=feats)) for w in within] if feats else []
+            except KeyError as e:
+                return declined(tool, VERSION, str(e))
+            place_g = None
+            if where.get("inside_place"):
+                bb = self.place_bbox(where["inside_place"])
+                if bb is None:
+                    return declined(tool, VERSION, f"unknown place {where['inside_place']!r}")
+                place_g = to_measure(box(*bb))
         keep = []
         with t.step("filter", f"{len(feats)} features"):
             for f in feats:
                 gm = to_measure(shape(f["geometry"]))
                 p = f.get("properties") or {}
-                a = gm.area / SQM_PER_ACRE
+                a = p.get("area_acres") if p.get("area_acres") is not None else gm.area / SQM_PER_ACRE
                 if inter is not None and not gm.intersects(inter):
                     continue
                 if notinter is not None and gm.intersects(notinter):
                     continue
-                if distl is not None and gm.distance(distl) > float(where.get("max_dist_m", 0)):
+                if any(lg is None or gm.distance(lg) > m for _, m, lg in wgeoms):
+                    continue
+                if place_g is not None and not gm.intersects(place_g):
                     continue
                 if "min_area_acres" in where and a < where["min_area_acres"]:
                     continue
@@ -542,12 +713,17 @@ class Engine:
                     continue
                 if "min_score" in where and float(p.get("score", 0)) < where["min_score"]:
                     continue
+                if "min_confidence" in where and float(p.get("confidence", 0)) < where["min_confidence"]:
+                    continue
                 keep.append(f)
         return self._env(tool, status="ok", result=Result(geojson=feature_collection(keep), metrics={
             "count_in": len(feats), "count_out": len(keep)}), confidence=1.0,
-            method="Spatial/attribute predicates evaluated in EPSG:32617", limits=[], sources=[], steps=t.steps)
+            method="Spatial/attribute predicates evaluated in EPSG:32617 (distances to layer unions)",
+            limits=["Distances are to the simplified web build of a layer when one exists (~3 m)"], sources=[],
+            steps=t.steps)
 
-    def export(self, geojson: dict[str, Any], fmt: str = "geojson") -> Envelope:
+    def export(self, geojson: dict[str, Any], fmt: str = "geojson", title: str | None = None,
+               summary: dict[str, Any] | None = None) -> Envelope:
         tool = "export"
         feats = geojson.get("features", [])
         t = StepTimer()
@@ -563,13 +739,58 @@ class Engine:
                     c = shape(f["geometry"]).representative_point()
                     w.writerow([f.get("id"), round(c.x, 7), round(c.y, 7), *[f["properties"].get(k) for k in keys]])
                 content = buf.getvalue()
+            elif fmt == "pdf":
+                content = None
             else:
-                return declined(tool, VERSION, f"unsupported format {fmt!r} (geojson, csv)")
+                return declined(tool, VERSION, f"unsupported format {fmt!r} (geojson, csv, pdf)")
             out = config.DATA / "out" / "exports"
             out.mkdir(parents=True, exist_ok=True)
             name = f"export_{time.strftime('%Y%m%dT%H%M%S')}_{len(feats)}.{fmt}"
-            (out / name).write_text(content)
+            if fmt == "pdf":
+                nbytes = self._pdf(out / name, feats, title or "Groundtruth results", summary or {})
+            else:
+                (out / name).write_text(content)
+                nbytes = len(content)
         return self._env(tool, status="ok", result=Result(metrics={
-            "count": len(feats), "format": fmt, "file": f"data/out/exports/{name}", "bytes": len(content),
-            "content": content if len(content) < 2_000_000 else None}), confidence=1.0,
-            method=f"serialised {len(feats)} features as {fmt}", limits=[], sources=[], steps=t.steps)
+            "count": len(feats), "format": fmt, "file": f"data/out/exports/{name}", "download": f"/api/v1/exports/{name}",
+            "bytes": nbytes, "content": content if content is not None and len(content) < 2_000_000 else None}),
+            confidence=1.0, method=f"serialised {len(feats)} features as {fmt}", limits=[], sources=[], steps=t.steps)
+
+    def _pdf(self, path, feats: list[dict[str, Any]], title: str, summary: dict[str, Any]) -> int:
+        """One-page PDF (reportlab, BSD): title, summary metrics, top results with thumbnails, sources + limits."""
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.units import inch
+        from reportlab.lib.utils import ImageReader
+        from reportlab.pdfgen import canvas
+
+        c = canvas.Canvas(str(path), pagesize=letter)
+        W, H = letter
+        c.setFont("Helvetica-Bold", 16); c.drawString(0.6 * inch, H - 0.8 * inch, title[:80])
+        c.setFont("Helvetica", 9); c.setFillGray(0.35)
+        c.drawString(0.6 * inch, H - 1.0 * inch, f"Groundtruth · Mecklenburg County, NC · NAIP {self.year} · "
+                     f"generated {time.strftime('%Y-%m-%d %H:%M')}")
+        c.setFillGray(0); c.setFont("Helvetica", 10)
+        y = H - 1.35 * inch
+        for k, v in list(summary.items())[:8]:
+            c.drawString(0.6 * inch, y, f"{k}: {v}"); y -= 13
+        y -= 6
+        tile = 1.05 * inch
+        for n, f in enumerate(feats[:24]):
+            p = f.get("properties") or {}
+            cid = p.get("chip_id")
+            if cid in self.index.pos:
+                x0 = 0.6 * inch + (n % 6) * (tile + 0.12 * inch)
+                y0 = y - tile - (n // 6) * (tile + 0.32 * inch)
+                c.drawImage(ImageReader(io.BytesIO(self.index.thumb_jpeg(self.index.pos[cid]))), x0, y0, tile, tile)
+                c.setFont("Helvetica", 6.5)
+                a = p.get("area_m2")
+                c.drawString(x0, y0 - 8, f"#{n + 1} conf {p.get('confidence', p.get('score', ''))}"
+                             + (f" · {a:.0f} m²" if a else ""))
+        c.setFont("Helvetica", 7); c.setFillGray(0.35)
+        foot = ["Imagery: USDA NAIP (public domain) via Microsoft Planetary Computer. Layers: OpenStreetMap (ODbL, © "
+                "OpenStreetMap contributors), FEMA NFHL (public domain), US Census.",
+                "Counts are detected objects in ranked results, not a census. Confidence is heuristic, not calibrated."]
+        for k, line in enumerate(foot):
+            c.drawString(0.6 * inch, 0.6 * inch + (len(foot) - k) * 9, line)
+        c.showPage(); c.save()
+        return path.stat().st_size

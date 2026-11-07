@@ -29,8 +29,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 _provider = PublicDataProvider(download_scenes=False)
 _lock = threading.Lock()
 
-TOOLS = {"search_text": True, "pick_candidates": True, "find_similar": True, "refine": True, "measure": True,
-         "add_layer": True, "filter": True, "export": True, "outline": True}
+TOOLS = {"search_text": True, "pick_candidates": True, "find_similar": True, "find_all": True, "refine": True,
+         "measure": True, "add_layer": True, "filter": True, "export": True, "outline": True, "compare_years": False}
 
 
 def available_indexes() -> list[dict[str, Any]]:
@@ -84,6 +84,20 @@ class FindSimilarIn(Common):
     examples: list[str]
     exclude: list[str] = []
     k: int = Field(50, ge=1, le=500)
+    bbox: list[float] | None = None
+    rerank: bool = False
+    concept: str | None = None
+
+
+class FindAllIn(Common):
+    examples: list[str]
+    exclude: list[str] = []
+    k: int = Field(200, ge=1, le=1000)
+    bbox: list[float] | None = None
+    place: str | None = None
+    concept: str | None = None
+    rerank: bool = True
+    outline_top: int = Field(200, ge=0, le=500)
 
 
 class RefineIn(Common):
@@ -91,6 +105,9 @@ class RefineIn(Common):
     accept: list[str] = []
     reject: list[str] = []
     k: int = Field(50, ge=1, le=500)
+    bbox: list[float] | None = None
+    place: str | None = None
+    concept: str | None = None
 
 
 class OutlineIn(Common):
@@ -104,6 +121,7 @@ class GeoIn(Common):
 
 class MeasureIn(GeoIn):
     to_layer: str | None = None
+    to_layers: list[str] = []
 
 
 class FilterIn(GeoIn):
@@ -112,6 +130,8 @@ class FilterIn(GeoIn):
 
 class ExportIn(GeoIn):
     format: str = "geojson"
+    title: str | None = None
+    summary: dict[str, Any] | None = None
 
 
 class AddLayerIn(Common):
@@ -168,12 +188,20 @@ def t_pick(b: PickIn) -> JSONResponse:
 
 @app.post("/api/v1/tools/find_similar")
 def t_find_similar(b: FindSimilarIn) -> JSONResponse:
-    return _env(eng(b.aoi, b.year).find_similar(b.examples, b.exclude, k=b.k))
+    return _env(eng(b.aoi, b.year).find_similar(b.examples, b.exclude, k=b.k, bbox=b.bbox, rerank=b.rerank,
+                                                 concept=b.concept))
+
+
+@app.post("/api/v1/tools/find_all")
+def t_find_all(b: FindAllIn) -> JSONResponse:
+    return _env(eng(b.aoi, b.year).find_all(b.examples, b.exclude, k=b.k, bbox=b.bbox, place=b.place,
+                                            concept=b.concept, rerank=b.rerank, outline_top=b.outline_top))
 
 
 @app.post("/api/v1/tools/refine")
 def t_refine(b: RefineIn) -> JSONResponse:
-    return _env(eng(b.aoi, b.year).refine(b.session_id, b.accept, b.reject, k=b.k))
+    return _env(eng(b.aoi, b.year).refine(b.session_id, b.accept, b.reject, k=b.k, bbox=b.bbox, place=b.place,
+                                          concept=b.concept))
 
 
 @app.post("/api/v1/tools/outline")
@@ -183,7 +211,7 @@ def t_outline(b: OutlineIn) -> JSONResponse:
 
 @app.post("/api/v1/tools/measure")
 def t_measure(b: MeasureIn) -> JSONResponse:
-    return _env(eng(b.aoi, b.year).measure(b.geojson, to_layer=b.to_layer))
+    return _env(eng(b.aoi, b.year).measure(b.geojson, to_layer=b.to_layer, to_layers=b.to_layers))
 
 
 @app.post("/api/v1/tools/filter")
@@ -193,7 +221,22 @@ def t_filter(b: FilterIn) -> JSONResponse:
 
 @app.post("/api/v1/tools/export")
 def t_export(b: ExportIn) -> JSONResponse:
-    return _env(eng(b.aoi, b.year).export(b.geojson, b.format))
+    return _env(eng(b.aoi, b.year).export(b.geojson, b.format, title=b.title, summary=b.summary))
+
+
+@app.get("/api/v1/exports/{name}")
+def export_file(name: str) -> Response:
+    d = (config.DATA / "out" / "exports").resolve()
+    p = (d / name).resolve()
+    if p.parent != d or not p.exists():
+        raise HTTPException(404)
+    return FileResponse(p, filename=name)
+
+
+@app.get("/api/v1/places")
+def places() -> dict[str, Any]:
+    d = json.loads((config.SENSES_PATH.parent / "places.json").read_text())
+    return {"source": d["_source"], "places": {k: v["bbox"] for k, v in d["places"].items()}}
 
 
 @app.post("/api/v1/tools/add_layer")
