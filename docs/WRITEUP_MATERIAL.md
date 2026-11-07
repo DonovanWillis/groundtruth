@@ -60,8 +60,20 @@ API with one honest response envelope, so an AI agent (via MCP) can drive the sa
   | measure | 0.65 s |
   | PDF | 0.2 s |
 
-- County evaluation vs hand labels + OSM: **PENDING** (`docs/EVALUATION.md`). Caveat for any number: 51 of 59 pool labels
-  are in one Lake Norman stretch.
+- **County (all of Mecklenburg, NAIP 2022, 107,770 chips):**
+  - Re-rank from 3 backyard pools, top 24 by eye: Ballantyne ~5–7 → ~21 pools, Lake Norman ~19–21.
+  - Hero flow (find pools → pick backyard → find all in Ballantyne → refine ×3 → within 1 km of I-485 → CSV), warm:
+    pick 0.6–0.7 s, find-all 0.7–0.8 s, refine < 0.5 s. 27 detected, 87 within 1 km of I-485.
+  - Evaluation vs hand labels + OSM (`docs/EVALUATION.md`; lower bounds; **51 of 59 pool labels are in one Lake Norman
+    stretch**):
+
+    | pools | result |
+    |---|---|
+    | search_text precision@24 | 0.58 |
+    | find-all leave-one-out precision@24 | 0.45 |
+    | look-alikes rejected | 3 of 5 |
+    | OSM-mapped pools found in Ballantyne (top 200) | 16 of 25 |
+    | outline IoU vs OSM (median) | 0.29 (outlines often include the pool deck) |
 
 ## What's novel
 1. **Pick what you meant.** Instead of guessing, it shows the ambiguity as six visual senses with "not this". The negatives
@@ -73,8 +85,14 @@ API with one honest response envelope, so an AI agent (via MCP) can drive the sa
 4. **Agent-ready.** The same tools are exposed through MCP and a map-action schema, so an agent can fly to Ballantyne, find
    pools within 1 km of I-485 and export a CSV, citing the envelopes it used.
 
-## Screenshots (docs/media/)
-**PENDING:** the UI pass is in progress (01_ask, 02_pick, 03_results, 04_layers, 05_worklog).
+## Screenshots (docs/media/, real runs on the south-Charlotte slice)
+1. `01_ask.png`: the ask screen with example chips.
+2. `02_pick.png`: "Which swimming pools do you mean?" (six senses with "not this").
+3. `03_results.png`: results with SAM outlines, count/acres, the honest limits, and the work log.
+4. `04_refine_or_layers.png`: live refine plus context layers.
+5. `05_worklog.png`: every tool call's steps with milliseconds, confidence, method and limits.
+
+Extras: `06_agent_mock.png` (labelled MOCK), `07_results_1280.png`, `08_new_since_2020.png`.
 
 ## 90-second demo script
 1. (0–10 s) "Aerial imagery of all of Mecklenburg County, 0.6 m. What do you want to find?" Type *swimming pools*.
