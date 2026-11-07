@@ -124,24 +124,31 @@ class Engine:
             out.append((i, cell if cell is not None else self.index.salient_cell(i)))
         return out
 
-    def localise(self, i: int, qvec: np.ndarray, context_px: int = 84) -> tuple[int, float]:
-        """Which of the chip's 16 cells best matches a text vector: OpenCLIP on a ``context_px`` crop centred on
-        each cell (from the stored thumbnail), resized to 224. Query-time only (16 CLIP passes per chip)."""
+    def localise(self, i: int, qvec: np.ndarray) -> tuple[int, float]:
+        """Which cell of the chip best matches a text vector (OpenCLIP on crops of the stored thumbnail).
+        Two stages, 20 CLIP passes per chip: (1) 16 windows of 84 px centred on each 2×2 block of cells → best block;
+        (2) its 4 cells, each with a 42 px context crop → best cell. Query-time only (pick_candidates' 6 tiles)."""
         from PIL import Image
 
         img = Image.open(io.BytesIO(self.index.thumb_jpeg(i))).convert("RGB")
-        g, cp, half = self.index.grid, config.CELL_PX, context_px // 2
-        crops = []
-        for cell in range(g * g):
-            r, c = divmod(cell, g)
-            cx, cy = c * cp + cp // 2, r * cp + cp // 2
-            x0 = min(max(cx - half, 0), config.CHIP_PX - context_px)
-            y0 = min(max(cy - half, 0), config.CHIP_PX - context_px)
-            crops.append(np.asarray(img.crop((x0, y0, x0 + context_px, y0 + context_px)).resize((224, 224), Image.BILINEAR)))
-        E = self._clip_model().embed_images(np.stack(crops), batch=16)
-        s = E @ qvec
-        best = int(np.argmax(s))
-        return best, float(s[best])
+        g, cp = self.index.grid, config.CHIP_PX // self.index.grid
+
+        def crop(cx: float, cy: float, size: int) -> np.ndarray:
+            x0 = int(min(max(cx - size / 2, 0), config.CHIP_PX - size))
+            y0 = int(min(max(cy - size / 2, 0), config.CHIP_PX - size))
+            return np.asarray(img.crop((x0, y0, x0 + size, y0 + size)).resize((224, 224), Image.BILINEAR))
+
+        clip = self._clip_model()
+        h = g // 2  # 2×2 blocks of cells
+        blocks = [(br, bc) for br in range(h) for bc in range(h)]
+        s1 = clip.embed_images(np.stack([crop((bc * 2 + 1) * cp, (br * 2 + 1) * cp, 3 * cp) for br, bc in blocks]),
+                               batch=16) @ qvec
+        br, bc = blocks[int(np.argmax(s1))]
+        cells = [(br * 2 + dr) * g + (bc * 2 + dc) for dr in (0, 1) for dc in (0, 1)]
+        s2 = clip.embed_images(np.stack([crop((c % g) * cp + cp / 2, (c // g) * cp + cp / 2, int(1.5 * cp)) for c in cells]),
+                               batch=4) @ qvec
+        k = int(np.argmax(s2))
+        return cells[k], float(s2[k])
 
     def _clip_rank(self, qvec: np.ndarray, k_chips: int) -> list[tuple[int, float, int]]:
         """(chip, score, best_view) by max over CLIP views."""

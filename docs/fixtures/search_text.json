@@ -51,7 +51,7 @@
        "chip_id": "2022_e4478_n33678",
        "year": 2022,
        "scene_id": "nc_m_3508058_sw_17_060_20220602",
-       "thumb_url": "/api/chips/2022_e4478_n33678.jpg",
+       "thumb_url": "/api/v1/chips/2022_e4478_n33678.jpg",
        "chip_bbox": [
         -80.82600664968541,
         35.059951820810255,
@@ -104,7 +104,7 @@
        "chip_id": "2022_e4482_n33673",
        "year": 2022,
        "scene_id": "nc_m_3508058_sw_17_060_20220602",
-       "thumb_url": "/api/chips/2022_e4482_n33673.jpg",
+       "thumb_url": "/api/v1/chips/2022_e4482_n33673.jpg",
        "chip_bbox": [
         -80.82096455149751,
         35.054750434410195,
@@ -157,7 +157,7 @@
        "chip_id": "2022_e4472_n33675",
        "year": 2022,
        "scene_id": "nc_m_3508058_sw_17_060_20220602",
-       "thumb_url": "/api/chips/2022_e4472_n33675.jpg",
+       "thumb_url": "/api/v1/chips/2022_e4472_n33675.jpg",
        "chip_bbox": [
         -80.83359312989278,
         35.05684616426456,
@@ -207,17 +207,17 @@
    {
     "phase": "embed_query",
     "detail": "OpenCLIP text, 4-prompt ensemble",
-    "ms": 4220.53
+    "ms": 4171.95
    },
    {
     "phase": "search",
     "detail": "max over 1 CLIP views \u00d7 272 chips",
-    "ms": 27.78
+    "ms": 27.43
    },
    {
     "phase": "localise+dedupe",
     "detail": "salient DINOv2 cell in best view; cell NMS",
-    "ms": 47.51
+    "ms": 48.45
    }
   ],
   "declined_reason": null,

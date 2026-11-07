@@ -50,26 +50,26 @@
        "chip_id": "2022_e4477_n33683",
        "year": 2022,
        "scene_id": "nc_m_3508058_nw_17_060_20220602",
-       "thumb_url": "/api/chips/2022_e4477_n33683.jpg",
+       "thumb_url": "/api/v1/chips/2022_e4477_n33683.jpg",
        "chip_bbox": [
         -80.82725906841438,
         35.065147610353364,
         -80.82578248095002,
         35.066361643947396
        ],
-       "cell": 28,
+       "cell": 27,
        "cell_bbox": [
-        -80.8265208,
-        35.0657544,
-        -80.8263362,
-        35.0659061
+        -80.826705,
+        35.0657546,
+        -80.8265205,
+        35.0659064
        ],
        "score": 0.275,
        "rank": 1,
        "raw_score": 0.2803,
        "sense_id": "backyard_pool",
        "sense_label": "Backyard pool",
-       "example": "2022_e4477_n33683#28",
+       "example": "2022_e4477_n33683#27",
        "group_members": [
         "2022_e4477_n33683",
         "2022_e4477_n33670",
@@ -117,26 +117,26 @@
        "chip_id": "2022_e4472_n33675",
        "year": 2022,
        "scene_id": "nc_m_3508058_sw_17_060_20220602",
-       "thumb_url": "/api/chips/2022_e4472_n33675.jpg",
+       "thumb_url": "/api/v1/chips/2022_e4472_n33675.jpg",
        "chip_bbox": [
         -80.83359312989278,
         35.05684616426456,
         -80.83211678552745,
         35.05806012252904
        ],
-       "cell": 30,
+       "cell": 31,
        "cell_bbox": [
-        -80.8324865,
-        35.0574524,
-        -80.832302,
-        35.0576041
+        -80.8323023,
+        35.0574521,
+        -80.8321177,
+        35.0576039
        ],
        "score": 0.3104,
        "rank": 2,
        "raw_score": 0.2892,
        "sense_id": "community_pool",
        "sense_label": "Community / apartment pool",
-       "example": "2022_e4472_n33675#30",
+       "example": "2022_e4472_n33675#31",
        "group_members": [
         "2022_e4472_n33675",
         "2022_e4482_n33673",
@@ -187,26 +187,26 @@
        "chip_id": "2022_e4482_n33672",
        "year": 2022,
        "scene_id": "nc_m_3508058_sw_17_060_20220602",
-       "thumb_url": "/api/chips/2022_e4482_n33672.jpg",
+       "thumb_url": "/api/v1/chips/2022_e4482_n33672.jpg",
        "chip_bbox": [
         -80.82096681869477,
         35.05371163960155,
         -80.81949034537965,
         35.05492575092031
        ],
-       "cell": 27,
+       "cell": 26,
        "cell_bbox": [
-        -80.8204128,
-        35.0543187,
-        -80.8202283,
-        35.0544705
+        -80.820597,
+        35.054319,
+        -80.8204125,
+        35.0544707
        ],
        "score": 0.3001,
        "rank": 3,
        "raw_score": 0.2872,
        "sense_id": "stormwater_pond",
        "sense_label": "Stormwater pond",
-       "example": "2022_e4482_n33672#27",
+       "example": "2022_e4482_n33672#26",
        "group_members": [
         "2022_e4482_n33672",
         "2022_e4479_n33677",
@@ -262,12 +262,12 @@
    {
     "phase": "embed_query",
     "detail": "raw query + 6 sense prompts (swimming_pool)",
-    "ms": 400.45
+    "ms": 415.26
    },
    {
     "phase": "candidate_pool",
     "detail": "top 200 raw + top 40 per sense",
-    "ms": 4.13
+    "ms": 2.76
    },
    {
     "phase": "pick",
@@ -277,7 +277,7 @@
    {
     "phase": "localise",
     "detail": "OpenCLIP on 16 context crops \u00d7 6 tiles (sense-specific)",
-    "ms": 37967.47
+    "ms": 11249.96
    }
   ],
   "declined_reason": null,

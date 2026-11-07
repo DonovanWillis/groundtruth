@@ -72,7 +72,14 @@ built, otherwise the largest indexed slice).
 | `export` | ✅ | `{geojson, format: "geojson"\|"csv"}` | `metrics.file, bytes, content` (inline when < 2 MB) |
 | `outline` | ✅ (v0.2) | `{examples: [id with #cell], max?: int=12}` | one polygon per id (SAM 2.1 hiera-tiny, prompt = cell box + 5 m + centre point). Properties: `area_m2, area_acres, sam_score, ms, cached`; `metrics.area_acres_total, ms_per_outline`. **Lazy:** call it only for results on screen. Cost: ~1.2 s per new outline on CPU, ~4 ms cached. Pools often include part of the deck |
 
+## Open fields (may change before v1)
+- `/api/v1/events` (agent SSE): reserved; the event shape is not defined yet.
+- `confidence` is `null` for the search tools. Calibrated probabilities are planned once labels exist.
+- `aoi`: `"county"` appears when the full-county index lands. Until then only slices (`unc_charlotte`, `south_charlotte`).
+
 ## Changelog
+- **v0.2.1 (2026-11-07)**: `thumb_url` now points to the real route `/api/v1/chips/{id}.jpg` (it was `/api/chips/...`).
+  Added `docs/fixtures/declined.json`. No other changes.
 - **v0.2 (2026-11-07)**: `outline` implemented (was `declined: not_implemented`). No other request/response changes.
   The `/health` `contract` field is now `"0.2"`. Also added `GET /api/v1/tiles/naip/{year}/{z}/{x}/{y}.png` (display tiles) and
   `GET /api/v1/boundary` (county outline).

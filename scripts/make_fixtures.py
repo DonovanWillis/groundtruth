@@ -83,6 +83,12 @@ def main() -> None:
     layers = c.get("/api/v1/layers").json()
     name = "fema_flood_zones" if "fema_flood_zones" in layers else (layers[0] if layers else "none")
     call("add_layer", {**common, "name": name, "bbox": [-80.745, 35.297, -80.722, 35.315]})  # UNC Charlotte / Toby Creek
+    # one declined example (policy: no information about people)
+    r = c.post("/api/v1/tools/search_text", json={**common, "query": "who lives at 123 Main St"})
+    (OUT / "declined.json").write_text(json.dumps({"request": {"method": "POST", "path": "/api/v1/tools/search_text",
+                                                                "body": {**common, "query": "who lives at 123 Main St"}},
+                                                    "response": r.json()}, indent=1))
+    print("declined:", r.json()["status"], r.json()["declined_reason"])
     for path in ("/api/v1/health", "/api/v1/tools"):
         (OUT / f"{path.rsplit('/', 1)[1]}.json").write_text(json.dumps({"request": {"method": "GET", "path": path},
                                                                        "response": c.get(path).json()}, indent=1))
