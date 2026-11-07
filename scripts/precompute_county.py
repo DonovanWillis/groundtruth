@@ -73,7 +73,9 @@ def process_scene(provider, sid, chips, year, dino, clip, batch):
         return None, {"read_s": t_read, "embed_s": 0.0, "n": 0}
     X = np.stack(arrs)
     t1 = time.perf_counter()
-    d = dino.embed_cells(X, batch=batch, grid=config.CELL_GRID).astype(np.float16)  # (n, 16, 768)
+    from groundtruth.embed import project_cells
+
+    d = project_cells(dino.embed_cells(X, batch=batch, grid=config.CELL_GRID)).astype(np.float16)  # (n, 64, 192)
     t_dino = time.perf_counter() - t1
     k = clip.embed_multi(X, batch=batch, subcrops=config.CLIP_SUBCROPS).astype(np.float16)  # (n, 5, 512)
     t_emb = time.perf_counter() - t1
@@ -102,7 +104,7 @@ def build_index(out: Path) -> None:
     meta = t.drop_columns(["jpeg", "dino", "clip"])
     pq.write_table(meta, out / "chips.parquet")
     # vectors: dino (N, 16, 768) cells, clip (N, V, 512) views; one FAISS fp16 index over all rows (cells/views)
-    for col, dim in (("dino", 768), ("clip", 512)):
+    for col, dim in (("dino", config.DINO_PCA_DIM), ("clip", 512)):
         flat = t.column(col).combine_chunks().flatten()
         X = np.asarray(flat, dtype=np.float32).reshape(t.num_rows, -1, dim)
         if col == "clip" and not config.CLIP_SUBCROPS:
@@ -122,7 +124,8 @@ def build_index(out: Path) -> None:
     np.save(out / "thumbs_offsets.npy", offs)
     (out / "index.json").write_text(json.dumps({
         "index_version": config.INDEX_VERSION, "chips": t.num_rows, "shards": len(shards),
-        "cell_grid": config.CELL_GRID, "clip_views": ["whole", "NW", "NE", "SW", "SE"] if config.CLIP_SUBCROPS else ["whole"],
+        "cell_grid": config.CELL_GRID, "dino_dim": config.DINO_PCA_DIM, "dino_pca": config.DINO_PCA_PATH.name,
+        "clip_views": ["whole", "NW", "NE", "SW", "SE"] if config.CLIP_SUBCROPS else ["whole"],
         "built": time.strftime("%Y-%m-%dT%H:%M:%S%z")}, indent=2))
     log.info("index built: %d chips from %d shards → %s", t.num_rows, len(shards), out)
 
@@ -135,6 +138,7 @@ def main() -> None:
     ap.add_argument("--plan-only", action="store_true")
     ap.add_argument("--index-only", action="store_true")
     ap.add_argument("--keep-cogs", action="store_true", help="keep downloaded COGs (default: delete after use)")
+    ap.add_argument("--no-index", action="store_true", help="only write shards (index is built after transfer)")
     a = ap.parse_args()
     provider = PublicDataProvider()
     year = a.year or provider.primary_year
@@ -183,7 +187,11 @@ def main() -> None:
                  "overall %.2f chips/s, eta %.0f min", i + 1, len(todo), sid, st["n"], st["read_s"], st["embed_s"],
                  st.get("dino_s", 0), st.get("clip_s", 0), st["n"] / max(st["embed_s"], 1e-6), done_n / el,
                  (total - done_n) / max(done_n / el, 1e-6) / 60)
-    build_index(out)
+    missing = [s for s in scenes if not (out / "shards" / f"{s}.parquet").exists()]
+    log.info("done: %d/%d scenes have shards%s", len(scenes) - len(missing), len(scenes),
+             f"; missing {missing} (re-run to retry)" if missing else "")
+    if not a.no_index:
+        build_index(out)
 
 
 if __name__ == "__main__":

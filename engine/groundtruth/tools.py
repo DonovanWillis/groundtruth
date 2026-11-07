@@ -23,7 +23,7 @@ from shapely.geometry import box, mapping, shape
 from groundtruth import config
 from groundtruth.envelope import Envelope, Result, StepTimer, declined, feature_collection
 from groundtruth.geo import SQM_PER_ACRE, length_m, to_measure
-from groundtruth.index import VIEW_CELLS, ChipIndex
+from groundtruth.index import ChipIndex, view_cells
 from groundtruth.providers.base import DataProvider
 
 VERSION = "0.2.0"
@@ -123,6 +123,25 @@ class Engine:
             out.append((i, cell if cell is not None else self.index.salient_cell(i)))
         return out
 
+    def localise(self, i: int, qvec: np.ndarray, context_px: int = 84) -> tuple[int, float]:
+        """Which of the chip's 16 cells best matches a text vector: OpenCLIP on a ``context_px`` crop centred on
+        each cell (from the stored thumbnail), resized to 224. Query-time only (16 CLIP passes per chip)."""
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(self.index.thumb_jpeg(i))).convert("RGB")
+        g, cp, half = self.index.grid, config.CELL_PX, context_px // 2
+        crops = []
+        for cell in range(g * g):
+            r, c = divmod(cell, g)
+            cx, cy = c * cp + cp // 2, r * cp + cp // 2
+            x0 = min(max(cx - half, 0), config.CHIP_PX - context_px)
+            y0 = min(max(cy - half, 0), config.CHIP_PX - context_px)
+            crops.append(np.asarray(img.crop((x0, y0, x0 + context_px, y0 + context_px)).resize((224, 224), Image.BILINEAR)))
+        E = self._clip_model().embed_images(np.stack(crops), batch=16)
+        s = E @ qvec
+        best = int(np.argmax(s))
+        return best, float(s[best])
+
     def _clip_rank(self, qvec: np.ndarray, k_chips: int) -> list[tuple[int, float, int]]:
         """(chip, score, best_view) by max over CLIP views."""
         V = self.index.n_views
@@ -164,7 +183,7 @@ class Engine:
         with t.step("search", f"max over {self.index.n_views} CLIP views × {len(self.index)} chips"):
             ranked = self._clip_rank(q, k * 3)
         with t.step("localise+dedupe", "salient DINOv2 cell in best view; cell NMS"):
-            hits = [(i, s, self.index.salient_cell(i, VIEW_CELLS[v])) for i, s, v in ranked]
+            hits = [(i, s, self.index.salient_cell(i, view_cells(v, self.index.grid))) for i, s, v in ranked]
             views = {i: v for i, _, v in ranked}
             hits = self._nms(hits, k)
         feats = [self.index.feature(i, cell=c, score=round(s, 4), rank=r + 1, view=views[i])
@@ -208,7 +227,7 @@ class Engine:
         chosen_vecs: list[np.ndarray] = []
 
         def rep_cell(j: int, view: int) -> int:
-            return self.index.salient_cell(int(idx[j]), VIEW_CELLS[int(view)])
+            return self.index.salient_cell(int(idx[j]), view_cells(int(view), self.index.grid))
 
         def try_pick(order: Sequence[int], view_of, sense: dict[str, Any], score_of) -> bool:
             for j in order:
@@ -240,6 +259,10 @@ class Engine:
                                 lambda j: raw[j]):
                     break
                 k_i += 1
+        with t.step("localise", f"OpenCLIP on 16 context crops × {len(chosen)} tiles (sense-specific)"):
+            for c in chosen:
+                s_i = next((k for k, s in enumerate(prompted) if s is c["sense"]), None)
+                c["cell"], c["cell_score"] = self.localise(c["i"], Q[s_i] if s_i is not None else qraw)
         feats = []
         for rank, c in enumerate(chosen, 1):
             j = c["j"]
@@ -257,7 +280,8 @@ class Engine:
             "count": len(feats), "pool": int(len(idx)), "sense_list": key,
             "senses": [f["properties"]["sense_id"] for f in feats]}),
             method="OpenCLIP sense prompts (conf/senses.json) → each chip assigned to its best sense → one tile per "
-                   f"sense, DINOv2 4×4-cell MMR diversity (cos<{max_sim})",
+                   f"sense, DINOv2 4×4-cell MMR diversity (cos<{max_sim}); object cell localised by OpenCLIP on "
+                   "16 per-cell context crops",
             assumptions=["The configured senses cover the plausible meanings of the query"], steps=t.steps)
 
     # ------------------------------------------------------------------ find_similar
@@ -349,6 +373,11 @@ class Engine:
             method="Logistic regression (sklearn, C=1, balanced) on DINOv2 4×4-cell vectors; positives = accepted "
                    "cells, negatives = rejected cells + 150 random background cells; scores = P(match) of best cell",
             assumptions=["Accepted/rejected examples are representative"], steps=t.steps)
+
+    # ------------------------------------------------------------------ outline
+    def outline(self, examples: Sequence[str], max: int = 12) -> Envelope:  # noqa: A002
+        """Planned: SAM 2 polygons prompted by each hit's cell box, lazily, cached by chip#cell."""
+        return declined("outline", VERSION, NOT_IMPLEMENTED)
 
     # ------------------------------------------------------------------ measure
     def measure(self, geojson: dict[str, Any], *, to_layer: str | None = None) -> Envelope:

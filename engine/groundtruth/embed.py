@@ -96,6 +96,20 @@ class DinoEmbedder:
         return _l2(np.concatenate(out), axis=-1)
 
 
+@lru_cache(maxsize=1)
+def _pca() -> tuple[np.ndarray, np.ndarray]:
+    from groundtruth import config
+
+    z = np.load(config.DINO_PCA_PATH)
+    return z["mean"].astype(np.float32), z["components"].astype(np.float32)  # (768,), (768, d)
+
+
+def project_cells(cells: np.ndarray) -> np.ndarray:
+    """Raw DINOv2 cell vectors (..., 768) → fixed PCA basis (..., d), L2-normalised. Same basis for every year."""
+    mu, P = _pca()
+    return _l2((cells.astype(np.float32) - mu) @ P, axis=-1)
+
+
 class ClipEmbedder:
     model_id = CLIP_ID
     dim = 512

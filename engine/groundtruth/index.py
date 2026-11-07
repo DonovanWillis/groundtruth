@@ -19,14 +19,13 @@ import pyarrow.parquet as pq
 from groundtruth import config
 from groundtruth.geo import MEASURE_CRS, WGS84, transformer
 
-# CLIP view → DINO cells it covers (4×4 grid, row-major)
-VIEW_CELLS: dict[int, tuple[int, ...]] = {
-    0: tuple(range(16)),
-    1: (0, 1, 4, 5),      # NW
-    2: (2, 3, 6, 7),      # NE
-    3: (8, 9, 12, 13),    # SW
-    4: (10, 11, 14, 15),  # SE
-}
+def view_cells(view: int, grid: int) -> tuple[int, ...]:
+    """CLIP view (0 whole, 1 NW, 2 NE, 3 SW, 4 SE) → DINO cell ids it covers (grid×grid, row-major)."""
+    if view == 0:
+        return tuple(range(grid * grid))
+    h = grid // 2
+    r0, c0 = {1: (0, 0), 2: (0, h), 3: (h, 0), 4: (h, h)}[view]
+    return tuple((r0 + r) * grid + (c0 + c) for r in range(h) for c in range(h))
 
 
 class ChipIndex:
@@ -100,13 +99,13 @@ class ChipIndex:
     # ---------- geometry ----------
     def cell_bounds_m(self, i: int, cell: int) -> tuple[float, float, float, float]:
         x0, y0 = float(self.meta["x0_m"][i]), float(self.meta["y0_m"][i])
-        size = config.CELL_PX * config.GSD_M
+        size = config.CHIP_M / self.grid
         r, c = divmod(cell, self.grid)
         top = y0 + config.CHIP_M
         return (x0 + c * size, top - (r + 1) * size, x0 + (c + 1) * size, top - r * size)
 
     def view_bounds_m(self, i: int, view: int) -> tuple[float, float, float, float]:
-        cells = VIEW_CELLS[view]
+        cells = view_cells(view, self.grid)
         bs = [self.cell_bounds_m(i, c) for c in cells]
         return (min(b[0] for b in bs), min(b[1] for b in bs), max(b[2] for b in bs), max(b[3] for b in bs))
 

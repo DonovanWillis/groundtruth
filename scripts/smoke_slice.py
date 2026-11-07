@@ -60,11 +60,14 @@ def main() -> None:
     pc = eng.pick_candidates(a.query)
     sheet(eng, pc, OUT / f"{a.aoi}_pick_candidates_{slug}.png", cols=6, title=f"pick_candidates('{a.query}')")
     picks = pc.result.geojson["features"]
-    pool_pick = next((f for f in picks if "pool" in f["properties"].get("sense_id", "")), None)
-    ex = a.pick_chip or (pool_pick["properties"]["example"] if pool_pick else st.result.geojson["features"][0]["id"])
-    fs = eng.find_similar([ex], k=24)
-    safe = ex.replace("#", "_c")
-    sheet(eng, fs, OUT / f"{a.aoi}_find_similar_{safe}.png", title=f"find_similar([{ex}]) top 24 (red box = matching cell)")
+    examples = [a.pick_chip] if a.pick_chip else [
+        f["properties"]["example"] for f in picks if f["properties"].get("sense_id", "").endswith("_pool")]
+    fs = None
+    for ex in examples or [st.result.geojson["features"][0]["id"]]:
+        fs = eng.find_similar([ex], k=24)
+        sense = next((f["properties"]["sense_id"] for f in picks if f["properties"].get("example") == ex), "manual")
+        sheet(eng, fs, OUT / f"{a.aoi}_find_similar_{sense}.png",
+              title=f"find_similar([{ex}]) from '{sense}' top 24 (red box = matching cell)")
     summary = {name: {"status": e.status, "metrics": e.result.metrics, "steps": [s.model_dump() for s in e.steps],
                       "ids": [f["id"] for f in e.result.geojson["features"]]}
                for name, e in (("search_text", st), ("pick_candidates", pc), ("find_similar", fs))}

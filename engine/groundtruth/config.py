@@ -14,13 +14,15 @@ CHIP_PX = 224
 STRIDE_PX = 192
 CHIP_M = CHIP_PX * GSD_M
 STRIDE_M = STRIDE_PX * GSD_M
-INDEX_VERSION = "chips224s192-g0.6-v2cells"
+INDEX_VERSION = "chips224s192-g0.6-v3c8p192"
 
-# Locked storage format v2 (docs/PRECOMPUTE.md): DINOv2 patch tokens pooled to a CELL_GRID x CELL_GRID grid
-# (16 cells of 56 px = 33.6 m, fp16) + whole-chip OpenCLIP (fp16). The 2x2 CLIP sub-crops measured 2.6x the
-# embedding time on the slice (> 2x limit), so they are OFF.
-CELL_GRID = 4
+# Locked storage format v3 (docs/PRECOMPUTE.md): DINOv2 patch tokens pooled to an 8x8 grid (64 cells of 28 px =
+# 16.8 m), projected with a fixed PCA basis to 192 dims, L2-normalised, fp16 + whole-chip OpenCLIP (fp16).
+# CLIP 2x2 sub-crops: A/B showed no gain (6 vs 6 pools / 24), so they are OFF everywhere.
+CELL_GRID = 8
 CELL_PX = CHIP_PX // CELL_GRID
+DINO_PCA_DIM = 192
+DINO_PCA_PATH = Path(__file__).resolve().parent / "conf" / f"dino_cells{CELL_GRID}_pca{DINO_PCA_DIM}.npz"
 CLIP_SUBCROPS = os.environ.get("GROUNDTRUTH_CLIP_SUBCROPS", "0") == "1"
 
 SENSES_PATH = Path(__file__).resolve().parent / "conf" / "senses.json"
@@ -30,6 +32,9 @@ AOIS: dict[str, tuple[float, float, float, float]] = {
     "unc_charlotte": (-80.745, 35.297, -80.722, 35.315),
     # residential area with many backyard pools, used to judge find_similar fairly
     "south_charlotte": (-80.835, 35.050, -80.815, 35.066),
+    # small extra areas used only to fit the DINOv2 cell PCA basis (land-cover variety)
+    "pca_airport_industrial": (-80.968, 35.200, -80.956, 35.210),
+    "pca_rural_north": (-80.930, 35.447, -80.918, 35.457),
 }
 
 

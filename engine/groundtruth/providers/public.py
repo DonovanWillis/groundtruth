@@ -224,8 +224,11 @@ class PublicDataProvider(DataProvider):
         d = self.data / "layers"
         return sorted(p.stem for p in d.glob("*.geojson")) if d.exists() else []
 
-    def get_layer(self, name: str, bbox: BBox | None = None) -> dict[str, Any]:
-        p = self.data / "layers" / f"{name}.geojson"
+    def get_layer(self, name: str, bbox: BBox | None = None, *, detail: str = "web") -> dict[str, Any]:
+        """``detail='web'`` (default) serves the simplified web build when one exists (scripts/build_web_layers.py);
+        ``detail='raw'`` always serves the full-resolution layer."""
+        web = self.data / "layers" / "web" / f"{name}.geojson"
+        p = web if detail == "web" and web.exists() else self.data / "layers" / f"{name}.geojson"
         if not p.exists():
             raise KeyError(f"unknown layer {name!r}; available: {self.layer_names()}")
         fc = json.loads(p.read_text())
