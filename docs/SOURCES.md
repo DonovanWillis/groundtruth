@@ -56,3 +56,11 @@ Every dataset and model Groundtruth uses. One-line summary per item for sign-off
 | DuckDB (+ spatial, httpfs extensions) | MIT |
 | pyarrow | Apache-2.0 |
 | pyosmium (`osmium`) | BSD-2 |
+| reportlab 4.4.4 (PDF one-pager export) | BSD-3 |
+| torch 2.14.1+cu126 / torchvision (GPU env for the one-off precompute + approved query-time GPU) | BSD-3 |
+| @fontsource/inter, @fontsource/ibm-plex-mono (UI fonts, bundled locally) | SIL OFL 1.1 (fonts) / MIT (packaging) |
+| React 18.3.1, Vite 5.4.11, TypeScript 5.6.3, @vitejs/plugin-react | MIT / MIT / Apache-2.0 / MIT |
+
+### Places config
+`engine/groundtruth/conf/places.json`: neighbourhood bounding boxes resolved once via OSM Nominatim (ODbL, © OpenStreetMap
+contributors), clipped to the county. UNC Charlotte comes from the OSM campus outline.

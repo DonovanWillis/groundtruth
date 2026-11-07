@@ -146,6 +146,33 @@ class AddLayerIn(Common):
     bbox: list[float] | None = None
 
 
+_REPLAY = os.environ.get("GROUNDTRUTH_REPLAY") == "1"
+_REPLAY_DIR = config.DATA / "replay" / "hero"
+
+
+def _replay(tool: str) -> dict[str, Any] | None:
+    """Replay fallback (GROUNDTRUTH_REPLAY=1): serve the recorded hero-flow envelope for this tool, clearly marked."""
+    if not _REPLAY:
+        return None
+    files = sorted(_REPLAY_DIR.glob(f"*_{tool}.json"))
+    if not files:
+        return None
+    env = json.loads(files[-1].read_text())["response"]
+    env["method"] = "[REPLAY] " + env.get("method", "")
+    env["steps"] = [{"phase": "replay", "detail": f"recorded response {files[-1].name} (not a live computation)", "ms": 0}] + env.get("steps", [])
+    env["limits"] = ["REPLAY: this is a recorded response from an earlier live run, not computed now"] + env.get("limits", [])
+    return env
+
+
+@app.middleware("http")
+async def replay_middleware(request, call_next):
+    if _REPLAY and request.method == "POST" and request.url.path.startswith("/api/v1/tools/"):
+        r = _replay(request.url.path.rsplit("/", 1)[-1])
+        if r is not None:
+            return JSONResponse(r, headers={"X-Groundtruth-Replay": "1"})
+    return await call_next(request)
+
+
 def _env(e: Envelope) -> JSONResponse:
     return JSONResponse(e.model_dump(mode="json"))
 

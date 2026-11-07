@@ -132,6 +132,46 @@ class Engine:
             out.append((i, cell if cell is not None else self.index.salient_cell(i)))
         return out
 
+    def localise_many(self, items: Sequence[tuple[int, np.ndarray]]) -> list[tuple[int, float]]:
+        """Batched two-stage localisation for several chips: one CLIP pass for all 16 block windows of every chip,
+        then one pass for the 4 cells inside each chip's best block (fp16 on GPU)."""
+        from PIL import Image
+
+        if not items:
+            return []
+        g, cp = self.index.grid, config.CHIP_PX // self.index.grid
+        h = g // 2
+        blocks = [(br, bc) for br in range(h) for bc in range(h)]
+        imgs = [Image.open(io.BytesIO(self.index.thumb_jpeg(i))).convert("RGB") for i, _ in items]
+
+        def crop(img, cx: float, cy: float, size: int) -> np.ndarray:
+            x0 = int(min(max(cx - size / 2, 0), config.CHIP_PX - size))
+            y0 = int(min(max(cy - size / 2, 0), config.CHIP_PX - size))
+            return np.asarray(img.crop((x0, y0, x0 + size, y0 + size)).resize((224, 224), Image.BILINEAR))
+
+        clip = self._clip_model()
+
+        def embed(arr: np.ndarray) -> np.ndarray:
+            import torch
+
+            if str(clip.device_name).startswith("cuda"):
+                with torch.autocast("cuda", dtype=torch.float16):
+                    return clip.embed_images(arr, batch=128)
+            return clip.embed_images(arr, batch=64)
+
+        s1 = embed(np.stack([crop(im, (bc * 2 + 1) * cp, (br * 2 + 1) * cp, 3 * cp) for im in imgs for br, bc in blocks]))
+        s1 = s1.reshape(len(items), len(blocks), -1)
+        best_blocks = [blocks[int(np.argmax(s1[k] @ q))] for k, (_, q) in enumerate(items)]
+        cells = [[(br * 2 + dr) * g + (bc * 2 + dc) for dr in (0, 1) for dc in (0, 1)] for br, bc in best_blocks]
+        s2 = embed(np.stack([crop(im, (c % g) * cp + cp / 2, (c // g) * cp + cp / 2, int(1.5 * cp))
+                             for im, cs in zip(imgs, cells) for c in cs])).reshape(len(items), 4, -1)
+        out = []
+        for k, (_, q) in enumerate(items):
+            sc = s2[k] @ q
+            j = int(np.argmax(sc))
+            out.append((cells[k][j], float(sc[j])))
+        return out
+
     def localise(self, i: int, qvec: np.ndarray) -> tuple[int, float]:
         """Which cell of the chip best matches a text vector (OpenCLIP on crops of the stored thumbnail).
         Two stages, 20 CLIP passes per chip: (1) 16 windows of 84 px centred on each 2×2 block of cells → best block;
@@ -276,9 +316,12 @@ class Engine:
                     break
                 k_i += 1
         with t.step("localise", f"OpenCLIP on 16 context crops × {len(chosen)} tiles (sense-specific)"):
+            qs = []
             for c in chosen:
                 s_i = next((k for k, s in enumerate(prompted) if s is c["sense"]), None)
-                c["cell"], c["cell_score"] = self.localise(c["i"], Q[s_i] if s_i is not None else qraw)
+                qs.append((c["i"], Q[s_i] if s_i is not None else qraw))
+            for c, (cell, sc) in zip(chosen, self.localise_many(qs)):
+                c["cell"], c["cell_score"] = cell, sc
         feats = []
         for rank, c in enumerate(chosen, 1):
             j = c["j"]
