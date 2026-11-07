@@ -25,15 +25,29 @@ def torch_device(name: str):
     return name
 
 
+def gpu_has_room() -> bool:
+    """Back-off guard: use the GPU only while at least GROUNDTRUTH_GPU_MIN_FREE_GB (default 1.5) is free, so anything
+    else that loads onto the card (e.g. ORYN) wins and Groundtruth falls back to CPU."""
+    try:
+        import torch
+
+        free, _ = torch.cuda.mem_get_info()
+        return free / 1024**3 >= float(os.environ.get("GROUNDTRUTH_GPU_MIN_FREE_GB", "1.5"))
+    except Exception:
+        return False
+
+
 def pick_device(override: str | None = None) -> str:
     forced = override or os.environ.get("GROUNDTRUTH_DEVICE")
+    if forced == "cuda" and not gpu_has_room():
+        return "cpu"
     if forced:
         return forced
     try:
         import torch
     except ImportError:
         return "cpu"
-    if torch.cuda.is_available():
+    if torch.cuda.is_available() and gpu_has_room():
         return "cuda"
     mps = getattr(torch.backends, "mps", None)
     if mps is not None and mps.is_available():

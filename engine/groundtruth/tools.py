@@ -314,8 +314,27 @@ class Engine:
         ranked = sorted(best.items(), key=lambda t: (-round(t[1][0], 6), self.index.ids[t[0]]))
         return [(i, s, c) for i, (s, c) in ranked]
 
+    def _bbox_rows(self, bbox: Sequence[float] | None) -> np.ndarray | None:
+        if not bbox:
+            return None
+        w, s, e, n = bbox
+        m = self.index.meta
+        return np.where((m["east"] >= w) & (m["west"] <= e) & (m["north"] >= s) & (m["south"] <= n))[0]
+
+    def _cell_rank_subset(self, q: np.ndarray, rows: np.ndarray, skip: set[int]) -> list[tuple[int, float, int]]:
+        """Exact best-cell scores over a subset of chips (bbox search): numpy over the memory-mapped cells."""
+        out = []
+        for k in range(0, len(rows), 4096):
+            r = rows[k:k + 4096]
+            S = np.asarray(self.index.dino[r], dtype=np.float32) @ q  # (n, cells)
+            best = S.argmax(1)
+            out += [(int(i), float(S[j, best[j]]), int(best[j])) for j, i in enumerate(r) if int(i) not in skip]
+        out.sort(key=lambda t: (-round(t[1], 6), self.index.ids[t[0]]))
+        return out
+
     def find_similar(self, chip_ids: Sequence[str], exclude_ids: Sequence[str] = (), k: int = 50,
-                     neg_weight: float = 0.5) -> Envelope:
+                     neg_weight: float = 0.5, bbox: Sequence[float] | None = None, rerank: bool = False,
+                     concept: str | None = None) -> Envelope:
         tool = "find_similar"
         pos = self._example_cells(chip_ids)
         if not pos:
@@ -325,16 +344,40 @@ class Engine:
         with t.step("query_vector", f"{len(pos)} positive cells, {len(neg)} negative cells, λ={neg_weight}"):
             q = self._cell_query(pos, neg, neg_weight)
         skip = {i for i, _ in pos} | {i for i, _ in neg}
-        with t.step("search", f"best-matching cell over {len(self.index) * self.index.n_cells} cells"):
-            ranked = self._cell_rank(q, k * 3, skip)
-        with t.step("dedupe", "cell NMS (overlapping chips)"):
+        rows = self._bbox_rows(bbox)
+        pool = 400
+        if rerank:
+            from groundtruth.rerank import concept_conf
+
+            pool = int(concept_conf(concept)["rerank"].get("pool", 400))
+        with t.step("search", f"best-matching 16.8 m cell over {len(self.index) if rows is None else len(rows)} chips"
+                    + (f" in bbox" if rows is not None else "")):
+            ranked = (self._cell_rank_subset(q, rows, skip) if rows is not None
+                      else self._cell_rank(q, max(k * 3, pool if rerank else 0), skip))
+        parts: dict[int, dict] = {}
+        info: dict[str, Any] = {}
+        if rerank and ranked:
+            from groundtruth.rerank import rerank as do_rerank
+
+            with t.step("rerank", f"full-res DINOv2 patches + colour ({concept or 'no concept'}) on top {pool}") as st:
+                rr, info = do_rerank(self.index, pos, neg, [i for i, _, _ in ranked[:pool]], concept=concept,
+                                     neg_weight=neg_weight)
+                st.detail += f" · {info['device']}"
+            ranked = [(i, s, c) for i, s, c, _ in rr]
+            parts = {i: p for i, _, _, p in rr}
+        with t.step("dedupe", "cell NMS (same object in overlapping chips)"):
             hits = self._nms(ranked, k, block=pos + neg)
-        feats = [self.index.feature(i, cell=c, score=round(s, 4), rank=r + 1) for r, (i, s, c) in enumerate(hits)]
+        feats = [self.index.feature(i, cell=c, score=round(s, 4), rank=r + 1, **({"rerank": parts[i]} if i in parts else {}))
+                 for r, (i, s, c) in enumerate(hits)]
+        method = ("DINOv2 ViT-B/14 8×8-cell (16.8 m, PCA-192) cosine, best cell per chip; query = mean(positive cells) − "
+                  f"{neg_weight}·mean(negative cells)")
+        if rerank:
+            method += (f"; top {pool} re-ranked by full-res DINOv2 patches (8.4 m) "
+                       f"×{info.get('patch_weight')} + concept colour ×{info.get('colour_weight')}")
         return self._env(tool, result=Result(geojson=feature_collection(feats), metrics={
-            "count": len(feats), "positives": len(pos), "negatives": len(neg)}),
-            method=f"DINOv2 ViT-B/14 4×4 sub-cell cosine (best cell per chip); query = mean(positive cells) − "
-                   f"{neg_weight}·mean(negative cells)",
-            assumptions=["The example cells show the intended object"], steps=t.steps)
+            "count": len(feats), "positives": len(pos), "negatives": len(neg), "reranked": bool(rerank and ranked),
+            "bbox": list(bbox) if bbox else None}),
+            method=method, assumptions=["The example cells show the intended object"], steps=t.steps)
 
     # ------------------------------------------------------------------ refine
     def refine(self, session_id: str | None, accept_ids: Sequence[str] = (), reject_ids: Sequence[str] = (),

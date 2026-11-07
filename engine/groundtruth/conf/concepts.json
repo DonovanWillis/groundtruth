@@ -1,0 +1,18 @@
+{
+  "_doc": "Per-concept settings (no code changes needed). rerank.colour: HSV range (H in degrees 0-360, S and V 0-255) whose pixel fraction per 14 px patch is blended into the re-rank score with rerank.colour_weight; patch_weight scales DINOv2 patch similarity. count_conf: confidence threshold for counting a result as a detected object.",
+  "_default": {"rerank": {"patch_weight": 1.0, "colour_weight": 0.0, "colour": null, "pool": 400}, "count_conf": 0.5},
+  "swimming_pool": {
+    "rerank": {"patch_weight": 0.6, "colour_weight": 0.4, "colour": {"hsv_lo": [165, 50, 100], "hsv_hi": [210, 255, 255]}, "pool": 400},
+    "count_conf": 0.5
+  },
+  "solar_installation": {
+    "rerank": {"patch_weight": 0.8, "colour_weight": 0.2, "colour": {"hsv_lo": [190, 30, 20], "hsv_hi": [250, 255, 110]}, "pool": 400},
+    "count_conf": 0.5
+  },
+  "parking_lot": {"rerank": {"patch_weight": 1.0, "colour_weight": 0.0, "colour": null, "pool": 400}, "count_conf": 0.5},
+  "warehouse": {"rerank": {"patch_weight": 1.0, "colour_weight": 0.0, "colour": null, "pool": 400}, "count_conf": 0.5},
+  "construction_site": {
+    "rerank": {"patch_weight": 0.8, "colour_weight": 0.2, "colour": {"hsv_lo": [5, 60, 90], "hsv_hi": [35, 255, 230]}, "pool": 400},
+    "count_conf": 0.5
+  }
+}
