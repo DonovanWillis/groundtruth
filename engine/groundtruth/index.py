@@ -131,7 +131,7 @@ class ChipIndex:
         m = self.meta
         w, s, e, n = (float(m[k][i]) for k in ("west", "south", "east", "north"))
         p: dict[str, Any] = {"chip_id": self.ids[i], "year": int(m["year"][i]), "scene_id": str(m["scene_id"][i]),
-                             "thumb_url": f"/api/chips/{self.ids[i]}.jpg", "chip_bbox": [w, s, e, n]}
+                             "thumb_url": f"/api/v1/chips/{self.ids[i]}.jpg", "chip_bbox": [w, s, e, n]}
         if cell is not None:
             p["cell"] = int(cell)
             p["cell_bbox"] = self.bounds_wgs84(self.cell_bounds_m(i, cell))
