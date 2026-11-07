@@ -23,14 +23,14 @@ from groundtruth.index import ChipIndex
 from groundtruth.providers.public import PublicDataProvider
 from groundtruth.tools import NOT_IMPLEMENTED, VERSION, Engine
 
-CONTRACT = "0.1"
+CONTRACT = "0.2"
 app = FastAPI(title="Groundtruth API", version=__version__)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 _provider = PublicDataProvider(download_scenes=False)
 _lock = threading.Lock()
 
 TOOLS = {"search_text": True, "pick_candidates": True, "find_similar": True, "refine": True, "measure": True,
-         "add_layer": True, "filter": True, "export": True, "outline": False}
+         "add_layer": True, "filter": True, "export": True, "outline": True}
 
 
 def available_indexes() -> list[dict[str, Any]]:
@@ -204,3 +204,59 @@ def t_add_layer(b: AddLayerIn) -> JSONResponse:
 @app.post("/api/v1/tools/{tool}")
 def t_unknown(tool: str) -> JSONResponse:
     return _env(declined(tool, VERSION, NOT_IMPLEMENTED if tool in TOOLS else f"unknown tool {tool!r}"))
+
+
+# ---------------- NAIP display tiles (cached; same source as the labelling page) ----------------
+_TILE_SEARCH: dict[int, str] = {}
+
+
+@app.get("/api/v1/tiles/naip/{year}/{z}/{x}/{y}.png")
+def naip_tile(year: int, z: int, x: int, y: int) -> Response:
+    import httpx
+
+    cache = config.DATA / "cache" / "tiles" / "naip" / str(year) / str(z) / str(x) / f"{y}.png"
+    if cache.exists():
+        return FileResponse(cache, media_type="image/png", headers={"Cache-Control": "max-age=86400"})
+    if z < 10 or z > 18 or year not in _provider.imagery_years():
+        return Response(status_code=204)
+    base = "https://planetarycomputer.microsoft.com/api/data/v1"
+    for attempt in range(2):
+        if year not in _TILE_SEARCH or attempt:
+            body = {"collections": ["naip"], "filter-lang": "cql2-json", "filter": {"op": "and", "args": [
+                {"op": "=", "args": [{"property": "naip:year"}, str(year)]},
+                {"op": "=", "args": [{"property": "naip:state"}, "nc"]}]}}
+            _TILE_SEARCH[year] = httpx.post(f"{base}/mosaic/register", json=body, timeout=30).json()["searchid"]
+        r = httpx.get(f"{base}/mosaic/{_TILE_SEARCH[year]}/tiles/WebMercatorQuad/{z}/{x}/{y}@1x.png",
+                      params={"collection": "naip", "assets": "image", "asset_bidx": "image|1,2,3", "nodata": "0"},
+                      timeout=60)
+        if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            tmp = cache.with_suffix(".tmp"); tmp.write_bytes(r.content); os.replace(tmp, cache)
+            return Response(r.content, media_type="image/png", headers={"Cache-Control": "max-age=86400"})
+        if r.status_code == 404 and "Unknown search" not in r.text:
+            return Response(status_code=204)
+    return Response(status_code=502)
+
+
+@app.get("/api/v1/boundary")
+def boundary() -> dict[str, Any]:
+    return _provider.get_boundary()
+
+
+# ---------------- demo UI (web/dist, built by Vite) ----------------
+_DIST = config.ROOT / "web" / "dist"
+
+
+@app.get("/")
+def ui_index() -> Response:
+    if (_DIST / "index.html").exists():
+        return FileResponse(_DIST / "index.html", headers={"Cache-Control": "no-store"})
+    return JSONResponse({"ok": True, "ui": "not built (cd web && npm run build)", "docs": "/docs"})
+
+
+@app.get("/assets/{path:path}")
+def ui_assets(path: str) -> Response:
+    p = (_DIST / "assets" / path).resolve()
+    if not str(p).startswith(str((_DIST / "assets").resolve())) or not p.exists():
+        raise HTTPException(404)
+    return FileResponse(p)

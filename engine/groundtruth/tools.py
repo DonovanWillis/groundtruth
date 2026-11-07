@@ -83,6 +83,7 @@ class Engine:
         self.aoi = aoi
         self.index = index or ChipIndex(config.precompute_dir(self.year, aoi))
         self._clip = None
+        self._outliner = None
         self.sessions: dict[str, Session] = {}
 
     # ------------------------------------------------------------------ shared
@@ -376,8 +377,34 @@ class Engine:
 
     # ------------------------------------------------------------------ outline
     def outline(self, examples: Sequence[str], max: int = 12) -> Envelope:  # noqa: A002
-        """Planned: SAM 2 polygons prompted by each hit's cell box, lazily, cached by chip#cell."""
-        return declined("outline", VERSION, NOT_IMPLEMENTED)
+        """SAM 2.1 polygons prompted by each hit's cell box (+1 cell margin). Lazy: only the ids given (the results
+        on screen), at most ``max``; cached by chip#cell."""
+        tool = "outline"
+        cells = self._example_cells(examples)[:max]
+        if not cells:
+            return declined(tool, VERSION, "none of the example ids are in the index")
+        if self._outliner is None:
+            from groundtruth.outline import Outliner
+
+            self._outliner = Outliner()
+        t = StepTimer()
+        feats = []
+        with t.step("sam2", f"{len(cells)} outlines (SAM 2.1 hiera-tiny, {self._outliner.device_name})"):
+            for i, c in cells:
+                feats.append(self._outliner.outline(self.index, i, c))
+        done = [f for f in feats if f.get("geometry")]
+        fresh = [f["properties"]["ms"] for f in feats if not f["properties"].get("cached")]
+        tot = sum(f["properties"]["area_m2"] for f in done)
+        return self._env(tool, status="ok" if len(done) == len(feats) else "partial",
+                         result=Result(geojson=feature_collection(feats), metrics={
+                             "count": len(done), "empty": len(feats) - len(done),
+                             "area_m2_total": round(tot, 2), "area_acres_total": round(tot / SQM_PER_ACRE, 4),
+                             "ms_per_outline": round(float(np.mean(fresh)), 1) if fresh else None,
+                             "cached": len(feats) - len(fresh)}),
+                         method="SAM 2.1 hiera-tiny (Apache-2.0) box prompt = matched 16.8 m cell + 1 cell margin, on the "
+                                "0.6 m chip; largest mask component overlapping the cell; simplified 0.3 m; areas in EPSG:32617",
+                         assumptions=["The object of interest is inside the prompted box"],
+                         limits=self._limits() + ["Outlines from 0.6 m imagery: edges ±1 px (0.6 m)"], steps=t.steps)
 
     # ------------------------------------------------------------------ measure
     def measure(self, geojson: dict[str, Any], *, to_layer: str | None = None) -> Envelope:
