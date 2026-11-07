@@ -108,7 +108,7 @@ class Engine:
     def _limits(self) -> list[str]:
         out = [f"NAIP {self.year} at 0.6 m/px: objects smaller than ~3 m are not resolvable",
                "Scores are embedding similarities, not calibrated probabilities",
-               "Hits are 33.6 m sub-cells of 134 m chips, not object outlines (use `outline`)"]
+               "Hits are 16.8 m cells of 134 m chips until outlined (`outline` / find_all's background outlines)"]
         if self.aoi != "county":
             out.append(f"Only the '{self.aoi}' area is indexed, not the whole county")
         return out
@@ -315,7 +315,7 @@ class Engine:
                                 lambda j: raw[j]):
                     break
                 k_i += 1
-        with t.step("localise", f"OpenCLIP on 16 context crops × {len(chosen)} tiles (sense-specific)"):
+        with t.step("localise", f"OpenCLIP 2-stage (16 windows + 4 cells) × {len(chosen)} tiles, batched (sense-specific)"):
             qs = []
             for c in chosen:
                 s_i = next((k for k, s in enumerate(prompted) if s is c["sense"]), None)
@@ -339,8 +339,8 @@ class Engine:
             "count": len(feats), "pool": int(len(idx)), "sense_list": key,
             "senses": [f["properties"]["sense_id"] for f in feats]}),
             method="OpenCLIP sense prompts (conf/senses.json) → each chip assigned to its best sense → one tile per "
-                   f"sense, DINOv2 4×4-cell MMR diversity (cos<{max_sim}); object cell localised by OpenCLIP on "
-                   "16 per-cell context crops",
+                   f"sense, DINOv2 8×8-cell MMR diversity (cos<{max_sim}); object cell localised by OpenCLIP in two "
+                   "stages (16 block windows, then 4 cells)",
             assumptions=["The configured senses cover the plausible meanings of the query"], steps=t.steps)
 
     # ------------------------------------------------------------------ find_similar
@@ -657,26 +657,48 @@ class Engine:
             for r, (i, p, c) in enumerate(hits):
                 sims = A @ self.index.cells(i)[c]
                 j = int(np.argmax(sims))
-                feats.append(self.index.feature(i, cell=c, score=round(p, 4), rank=r + 1, confidence=round(p, 3),
-                                                why={"nearest_accepted": f"{self.index.ids[pos[j][0]]}#{pos[j][1]}",
-                                                     "similarity": round(float(sims[j]), 3)}))
+                f = self.index.feature(i, cell=c, score=round(p, 4), rank=r + 1, confidence=round(p, 3),
+                                       example=f"{self.index.ids[i]}#{c}",
+                                       why={"nearest_accepted": f"{self.index.ids[pos[j][0]]}#{pos[j][1]}",
+                                            "similarity": round(float(sims[j]), 3)})
+                ol = self._cached_outline(i, c)
+                if ol and ol.get("geometry"):
+                    f["geometry"] = ol["geometry"]
+                    f["properties"].update(geometry_kind="outline", area_m2=ol["properties"]["area_m2"],
+                                           area_acres=ol["properties"]["area_acres"])
+                else:
+                    f["geometry"] = mapping(box(*f["properties"]["cell_bbox"]))
+                    f["properties"].update(geometry_kind="cell", area_m2=None, area_acres=None)
+                feats.append(f)
         total_ms = sum(s.ms for s in t.steps)
         return self._env(tool, result=Result(geojson=feature_collection(feats), metrics={
             "count": len(feats), "session_id": sid, "accepted": len(pos), "rejected": len(neg),
             "pool_chips": len(cand), "refine_ms": round(total_ms, 1)}),
             confidence=None,
-            method="Logistic regression (sklearn, C=1, balanced) on DINOv2 4×4-cell vectors; positives = accepted "
+            method="Logistic regression (sklearn, C=1, balanced) on DINOv2 8×8-cell (16.8 m, PCA-192) vectors; positives = accepted "
                    "cells, negatives = rejected cells + 150 random background cells; scores = P(match) of best cell",
             assumptions=["Accepted/rejected examples are representative"], steps=t.steps)
 
     # ------------------------------------------------------------------ outline
-    def outline(self, examples: Sequence[str], max: int = 12) -> Envelope:  # noqa: A002
+    def outline(self, examples: Sequence[str], max: int = 12, cached_only: bool = False) -> Envelope:  # noqa: A002
         """SAM 2.1 polygons prompted by each hit's cell box (+1 cell margin). Lazy: only the ids given (the results
-        on screen), at most ``max``; cached by chip#cell."""
+        on screen), at most ``max``; cached by chip#cell. ``cached_only`` returns only what is already computed (for
+        polling while find_all's background queue works) and never runs SAM."""
         tool = "outline"
         cells = self._example_cells(examples)[:max]
         if not cells:
             return declined(tool, VERSION, "none of the example ids are in the index")
+        if cached_only:
+            t = StepTimer()
+            with t.step("cache", f"{len(cells)} ids, cached only"):
+                feats = [f for f in (self._cached_outline(i, c) for i, c in cells) if f]
+            done = [f for f in feats if f.get("geometry")]
+            tot = sum(f["properties"]["area_m2"] for f in done)
+            return self._env(tool, status="ok" if len(feats) == len(cells) else "partial",
+                             result=Result(geojson=feature_collection(feats), metrics={
+                                 "count": len(done), "pending": len(cells) - len(feats), "cached": len(feats),
+                                 "area_m2_total": round(tot, 2), "area_acres_total": round(tot / SQM_PER_ACRE, 4)}),
+                             method="cached SAM 2.1 outlines only (no new computation)", steps=t.steps)
         if self._outliner is None:
             from groundtruth.outline import Outliner
 

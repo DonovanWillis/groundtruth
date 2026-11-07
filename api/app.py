@@ -23,7 +23,7 @@ from groundtruth.index import ChipIndex
 from groundtruth.providers.public import PublicDataProvider
 from groundtruth.tools import NOT_IMPLEMENTED, VERSION, Engine
 
-CONTRACT = "0.3"
+CONTRACT = "0.3.1"
 app = FastAPI(title="Groundtruth API", version=__version__)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 _provider = PublicDataProvider(download_scenes=False)
@@ -33,13 +33,29 @@ TOOLS = {"search_text": True, "pick_candidates": True, "find_similar": True, "fi
          "measure": True, "add_layer": True, "filter": True, "export": True, "outline": True, "compare_years": True}
 
 
+_BBOX_CACHE: dict[str, tuple[float, list[float]]] = {}
+
+
+def _index_bbox(d) -> list[float] | None:
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    p = d / "chips.parquet"
+    key, mt = str(p), p.stat().st_mtime
+    if key not in _BBOX_CACHE or _BBOX_CACHE[key][0] != mt:
+        t = pq.read_table(p, columns=["west", "south", "east", "north"])
+        _BBOX_CACHE[key] = (mt, [round(pc.min(t["west"]).as_py(), 5), round(pc.min(t["south"]).as_py(), 5),
+                                 round(pc.max(t["east"]).as_py(), 5), round(pc.max(t["north"]).as_py(), 5)])
+    return _BBOX_CACHE[key][1]
+
+
 def available_indexes() -> list[dict[str, Any]]:
     root = config.DATA / "precompute" / config.INDEX_VERSION
     out = []
     for info in sorted(root.glob("*/*/index.json")):
         d = json.loads(info.read_text())
         out.append({"aoi": info.parent.parent.name, "year": int(info.parent.name), "chips": d["chips"],
-                    "index_version": d["index_version"]})
+                    "index_version": d["index_version"], "bbox": _index_bbox(info.parent)})
     return out
 
 
@@ -119,7 +135,8 @@ class CompareYearsIn(Common):
 
 class OutlineIn(Common):
     examples: list[str]
-    max: int = Field(12, ge=1, le=50)
+    max: int = Field(24, ge=1, le=50)
+    cached_only: bool = False
 
 
 class GeoIn(Common):
@@ -162,6 +179,25 @@ def _replay(tool: str) -> dict[str, Any] | None:
     env["steps"] = [{"phase": "replay", "detail": f"recorded response {files[-1].name} (not a live computation)", "ms": 0}] + env.get("steps", [])
     env["limits"] = ["REPLAY: this is a recorded response from an earlier live run, not computed now"] + env.get("limits", [])
     return env
+
+
+@app.on_event("startup")
+def _warmup() -> None:
+    """Load models + the default index in the background so the first demo call is warm (set GROUNDTRUTH_WARMUP=0 to skip)."""
+    if os.environ.get("GROUNDTRUTH_WARMUP", "1") != "1":
+        return
+
+    def run() -> None:
+        try:
+            e = eng(None, None)
+            pc = e.pick_candidates("swimming pool")
+            ex = pc.result.geojson["features"][0]["properties"]["example"]
+            e.find_similar([ex], k=10, rerank=True, concept="swimming_pool")
+            e.outline([ex])
+        except Exception:
+            pass
+
+    threading.Thread(target=run, daemon=True, name="warmup").start()
 
 
 @app.middleware("http")
@@ -245,7 +281,7 @@ def t_refine(b: RefineIn) -> JSONResponse:
 
 @app.post("/api/v1/tools/outline")
 def t_outline(b: OutlineIn) -> JSONResponse:
-    return _env(eng(b.aoi, b.year).outline(b.examples, max=b.max))
+    return _env(eng(b.aoi, b.year).outline(b.examples, max=b.max, cached_only=b.cached_only))
 
 
 @app.post("/api/v1/tools/measure")

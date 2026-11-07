@@ -2,7 +2,7 @@
 indices over all cell/view rows + a JPEG thumbnail pack.
 
 Row r of dino.faiss is (chip r // 16, cell r % 16); row r of clip.faiss is (chip r // V, view r % V).
-Cells are numbered row-major from the north-west corner of the chip (4×4 grid of 56 px = 33.6 m).
+Cells are numbered row-major from the north-west corner of the chip (8×8 grid of 28 px = 16.8 m in format v3).
 CLIP views are [whole, NW, NE, SW, SE].
 """
 
@@ -131,7 +131,8 @@ class ChipIndex:
         m = self.meta
         w, s, e, n = (float(m[k][i]) for k in ("west", "south", "east", "north"))
         p: dict[str, Any] = {"chip_id": self.ids[i], "year": int(m["year"][i]), "scene_id": str(m["scene_id"][i]),
-                             "thumb_url": f"/api/v1/chips/{self.ids[i]}.jpg", "chip_bbox": [w, s, e, n]}
+                             "thumb_url": f"/api/v1/chips/{self.ids[i]}.jpg?aoi={self.root.parent.name}",
+                             "chip_bbox": [w, s, e, n]}
         if cell is not None:
             p["cell"] = int(cell)
             p["cell_bbox"] = self.bounds_wgs84(self.cell_bounds_m(i, cell))

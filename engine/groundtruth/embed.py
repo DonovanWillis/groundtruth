@@ -2,7 +2,8 @@
 
 - DINOv2 ViT-B/14 (``facebook/dinov2-base`` @ pinned revision, Apache-2.0): image↔image.
   Input 224×224 RGB, ImageNet mean/std. ``embed_cells`` → (N, 16, 768): final-layer-normed patch tokens
-  (16×16 patches of 14 px) average-pooled to a 4×4 grid of 56 px (33.6 m) cells, each L2-normalised.
+  (16×16 patches of 14 px) average-pooled to a grid×grid set of cells (format v3: 8×8 of 28 px = 16.8 m, then a fixed
+  PCA basis 768→192 via ``project_cells``), each L2-normalised.
   Cell index = row·4 + col, row 0 = north.
 - OpenCLIP ViT-B-16 ``laion2b_s34b_b88k`` (MIT): text↔image. ``embed_multi`` → (N, 5, 512): the whole chip plus
   the four 112 px quadrants (NW, NE, SW, SE) upsampled to 224, each L2-normalised. Text queries use a small
