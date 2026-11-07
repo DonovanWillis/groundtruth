@@ -15,6 +15,13 @@ def torch_device(name: str):
         import torch_directml
 
         return torch_directml.device()
+    if name.startswith("cuda"):
+        cap = float(os.environ.get("GROUNDTRUTH_VRAM_GB", "0") or 0)
+        if cap > 0:  # hard per-process cap (allocations beyond it raise OOM instead of growing)
+            import torch
+
+            total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            torch.cuda.set_per_process_memory_fraction(min(1.0, cap / total), 0)
     return name
 
 

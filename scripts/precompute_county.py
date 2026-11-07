@@ -96,38 +96,48 @@ def process_scene(provider, sid, chips, year, dino, clip, batch):
 
 
 def build_index(out: Path) -> None:
+    """Stream shards (sorted by name; rows in plan order) into memory-mapped fp16 arrays + FAISS, one shard at a time,
+    so peak RAM stays ~one shard regardless of county size. Row order = chips.parquet order (deterministic)."""
     import faiss
 
     shards = sorted((out / "shards").glob("*.parquet"))
-    tables = [pq.read_table(s) for s in shards]
-    t = pa.concat_tables(tables).sort_by("chip_id")
-    meta = t.drop_columns(["jpeg", "dino", "clip"])
-    pq.write_table(meta, out / "chips.parquet")
-    # vectors: dino (N, 16, 768) cells, clip (N, V, 512) views; one FAISS fp16 index over all rows (cells/views)
-    for col, dim in (("dino", config.DINO_PCA_DIM), ("clip", 512)):
-        flat = t.column(col).combine_chunks().flatten()
-        X = np.asarray(flat, dtype=np.float32).reshape(t.num_rows, -1, dim)
-        if col == "clip" and not config.CLIP_SUBCROPS:
-            X = X[:, :1]  # locked format: whole-chip view only (older shards may carry sub-crop views)
-        X /= np.clip(np.linalg.norm(X, axis=-1, keepdims=True), 1e-12, None)
-        np.save(out / f"{col}.npy", X.astype(np.float16))
-        idx = faiss.IndexScalarQuantizer(dim, faiss.ScalarQuantizer.QT_fp16, faiss.METRIC_INNER_PRODUCT)
-        idx.add(X.reshape(-1, dim))
-        faiss.write_index(idx, str(out / f"{col}.faiss"))
-        del X
-    # thumbnails as one id-sorted jpeg pack (offsets in chips.parquet order)
-    blobs = t.column("jpeg").to_pylist()
-    offs = np.cumsum([0] + [len(b) for b in blobs]).astype(np.int64)
-    with open(out / "thumbs.bin", "wb") as f:
-        for b in blobs:
-            f.write(b)
-    np.save(out / "thumbs_offsets.npy", offs)
+    metas, n = [], 0
+    for s in shards:
+        m = pq.read_table(s, columns=[c for c in pq.read_schema(s).names if c not in ("jpeg", "dino", "clip")])
+        metas.append(m); n += m.num_rows
+    pq.write_table(pa.concat_tables(metas), out / "chips.parquet")
+    views = 1 if not config.CLIP_SUBCROPS else 5
+    dims = {"dino": (config.CELL_GRID * config.CELL_GRID, config.DINO_PCA_DIM), "clip": (views, 512)}
+    mm = {c: np.lib.format.open_memmap(out / f"{c}.npy.tmp", mode="w+", dtype=np.float16, shape=(n, *d))
+          for c, d in dims.items()}
+    idx = {c: faiss.IndexScalarQuantizer(d[1], faiss.ScalarQuantizer.QT_fp16, faiss.METRIC_INNER_PRODUCT)
+           for c, d in dims.items()}
+    offs = [0]
+    row = 0
+    with open(out / "thumbs.bin.tmp", "wb") as tf:
+        for s in shards:
+            t = pq.read_table(s, columns=["jpeg", "dino", "clip"])
+            k = t.num_rows
+            for c, (v, d) in dims.items():
+                X = np.asarray(t.column(c).combine_chunks().flatten(), dtype=np.float32).reshape(k, -1, d)[:, :v]
+                X /= np.clip(np.linalg.norm(X, axis=-1, keepdims=True), 1e-12, None)
+                mm[c][row:row + k] = X.astype(np.float16)
+                idx[c].add(np.ascontiguousarray(X.reshape(-1, d)))
+            for b in t.column("jpeg").to_pylist():
+                tf.write(b); offs.append(offs[-1] + len(b))
+            row += k
+    for c in dims:
+        mm[c].flush(); del mm[c]
+        os.replace(out / f"{c}.npy.tmp", out / f"{c}.npy")
+        faiss.write_index(idx[c], str(out / f"{c}.faiss"))
+    os.replace(out / "thumbs.bin.tmp", out / "thumbs.bin")
+    np.save(out / "thumbs_offsets.npy", np.asarray(offs, dtype=np.int64))
     (out / "index.json").write_text(json.dumps({
-        "index_version": config.INDEX_VERSION, "chips": t.num_rows, "shards": len(shards),
+        "index_version": config.INDEX_VERSION, "chips": n, "shards": len(shards),
         "cell_grid": config.CELL_GRID, "dino_dim": config.DINO_PCA_DIM, "dino_pca": config.DINO_PCA_PATH.name,
         "clip_views": ["whole", "NW", "NE", "SW", "SE"] if config.CLIP_SUBCROPS else ["whole"],
         "built": time.strftime("%Y-%m-%dT%H:%M:%S%z")}, indent=2))
-    log.info("index built: %d chips from %d shards → %s", t.num_rows, len(shards), out)
+    log.info("index built: %d chips from %d shards → %s", n, len(shards), out)
 
 
 def main() -> None:
@@ -146,6 +156,8 @@ def main() -> None:
     (out / "shards").mkdir(parents=True, exist_ok=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s",
                         handlers=[logging.StreamHandler(), logging.FileHandler(out / "precompute.log")])
+    for noisy in ("httpx", "httpcore", "urllib3"):  # their INFO lines contain signed (SAS) URLs: never log tokens
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     if a.index_only:
         return build_index(out)
     scenes = plan(provider, a.aoi, year)

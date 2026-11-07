@@ -18,6 +18,7 @@ dependencies = [
   "pystac-client",
   "planetary-computer",
   "httpx",
+  "pyarrow",
 ]
 
 [project.optional-dependencies]

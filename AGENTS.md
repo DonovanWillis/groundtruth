@@ -19,8 +19,29 @@ Read `CLAUDE.md` for the project rules (envelope, DataProvider, licences, no peo
 - Never handle or commit API keys, tokens or `.env*` files. Never send data about people.
 - Keep updates current with `git fetch origin && git merge origin/main`.
 
-## Running the API locally
+## Run the API locally (slice bundle, no county data needed)
+The release asset `groundtruth-slices-chips224s192-g0.6-v3c8p192.tar.gz` (40.5 MB, on tag `contract-v0.2.1`) holds
+two indexed slices (UNC Charlotte 342 chips, south Charlotte 272 chips, NAIP 2022) plus the county boundary and
+FEMA/OSM layers clipped to them. It contains public/open data only; licences are in `BUNDLE_SOURCES.md` inside it.
+SHA-256 `01c3841d0bcc16ea4b14a6d988cde34ecc655f485f0f31dc600b0fcd89093005`.
+
+**macOS / Linux** (Python 3.11+, from the repo root):
 ```bash
-bash scripts/run_api.sh                    # 127.0.0.1:8000, see /api/v1/health
-pytest -q                                   # engine tests (yours go in tests/mcp, tests/agent)
+make api-slice            # venv (CPU torch) + download + verify + unpack bundle + API on http://127.0.0.1:8000
+curl -s http://127.0.0.1:8000/api/v1/health
 ```
+
+**Windows (PowerShell)**, from the repo root:
+```powershell
+py -3.12 -m venv .venv
+.venv\Scripts\pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+.venv\Scripts\pip install -e ".[api,ml,dev]"
+$b = "groundtruth-slices-chips224s192-g0.6-v3c8p192.tar.gz"
+curl.exe -fL -o $b "https://github.com/sensordyme-debug/groundtruth/releases/download/contract-v0.2.1/$b"
+(Get-FileHash $b -Algorithm SHA256).Hash   # must equal 01C3841D0BCC16EA4B14A6D988CDE34ECC655F485F0F31DC600B0FCD89093005
+tar -xzf $b
+$env:PYTHONPATH = "engine;."; .venv\Scripts\uvicorn api.app:app --host 127.0.0.1 --port 8000
+```
+First calls download public model weights from Hugging Face once: OpenCLIP (~600 MB) for `search_text`/`pick_candidates`
+and SAM 2.1 tiny (~150 MB) for `outline`. Use `"aoi": "south_charlotte"` or `"unc_charlotte"` in tool bodies (both are
+also the defaults). On CPU, `pick_candidates` takes ~10–15 s and `outline` ~1.2 s per new polygon.

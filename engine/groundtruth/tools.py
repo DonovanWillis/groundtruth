@@ -457,7 +457,8 @@ class Engine:
             return declined(tool, VERSION, str(e))
         return self._env(tool, status="ok", result=Result(geojson=fc, metrics={"count": len(fc["features"])}),
                          confidence=1.0, method=f"reference layer '{name}' from {self.provider.name} provider",
-                         limits=[], sources=self.provider.source_for(name.split("_")[0]) or self.provider.sources(),
+                         limits=[], sources=self.provider.source_for(
+                             {"osm": "openstreetmap"}.get(name.split("_")[0], name.split("_")[0])) or self.provider.sources(),
                          steps=t.steps)
 
     def filter(self, geojson: dict[str, Any], where: dict[str, Any]) -> Envelope:
