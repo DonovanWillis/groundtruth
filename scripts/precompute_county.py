@@ -105,6 +105,8 @@ def build_index(out: Path) -> None:
     for col, dim in (("dino", 768), ("clip", 512)):
         flat = t.column(col).combine_chunks().flatten()
         X = np.asarray(flat, dtype=np.float32).reshape(t.num_rows, -1, dim)
+        if col == "clip" and not config.CLIP_SUBCROPS:
+            X = X[:, :1]  # locked format: whole-chip view only (older shards may carry sub-crop views)
         X /= np.clip(np.linalg.norm(X, axis=-1, keepdims=True), 1e-12, None)
         np.save(out / f"{col}.npy", X.astype(np.float16))
         idx = faiss.IndexScalarQuantizer(dim, faiss.ScalarQuantizer.QT_fp16, faiss.METRIC_INNER_PRODUCT)

@@ -1,39 +1,37 @@
-# Full-county precompute: estimate and how to run it
+# Precompute: locked storage format, cost and where it runs
 
-Measured on the UNC Charlotte slice (2026-11-07): 342 chips, NAIP 2022.
-
-| quantity | measured / derived |
+## Locked storage format v2 (`INDEX_VERSION = chips224s192-g0.6-v2cells`)
+| item | value |
 |---|---|
-| chips per year, whole county (224 px, stride 192, 0.6 m) | **107,770** (54 NAIP scenes; same for 2022 and 2020) |
-| embed throughput, this PC, CPU only (Ryzen 7 5700X, 8 threads, `nice`) | **4.4 chips/s** (DINOv2 ViT-B/14 + OpenCLIP ViT-B/16 together) |
-| NAIP download | ~470 MB per scene; **~10 MB/s** with 16 parallel ranges from `naipeuwest` (Azure West Europe) → ~45 s per scene, ~42 min per year. Prefetched while the previous scene embeds. |
-| remote windowed reads (old approach) | 265 s for a 13 MP window, so we don't use it |
-| storage per chip | ~20 KB shard (JPEG thumb ~17 KB + fp16 vectors 2.5 KB) |
-| storage per year | ~2.2 GB shards + ~1.8 GB thumbs pack + ~0.55 GB FAISS + ~0.28 GB vectors ≈ **4.8 GB** (+ ≤1 GB temporary COGs, deleted after use) |
+| chip grid | EPSG:32617, 224×224 px at 0.6 m (134.4 m); stride 192 px (115.2 m, 19.2 m overlap); `chip_id = {year}_e{col}_n{row}` |
+| DINOv2 | `facebook/dinov2-base` @ `f9e44c81…` (Apache-2.0). Final-layer-normed patch tokens (16×16 of 14 px), average-pooled to a **4×4 grid** of 56 px (33.6 m) cells, each L2-normalised. **(N, 16, 768) float16** |
+| OpenCLIP | ViT-B-16 `laion2b_s34b_b88k` (MIT). **Whole chip only, (N, 1, 512) float16**, L2-normalised |
+| CLIP 2×2 sub-crops | **Off everywhere.** The A/B below showed no gain. The code keeps the option (`GROUNDTRUTH_CLIP_SUBCROPS=1`) but it is not used. |
+| thumbnails | JPEG q88, 224×224, in the shard; packed into `thumbs.bin` + `thumbs_offsets.npy` |
+| shard | one parquet per NAIP scene: `chip_id, year, scene_id, col, row, x0_m, y0_m, west, south, east, north, valid_frac, jpeg, dino[16·768], clip[512]` |
+| index | `chips.parquet` (meta), `dino.npy` (N,16,768) fp16, `clip.npy` (N,1,512) fp16, FAISS `IndexScalarQuantizer(fp16, inner product)` over all cell rows (`dino.faiss`) and chip rows (`clip.faiss`) |
 
-## Time per year
-| where | embed | download | total per year | both years |
-|---|---|---|---|---|
-| this PC, CPU | 107,770 / 4.4 ≈ **6.8 h** | overlapped | **≈ 7 h** | ≈ 14 h |
-| this PC, CPU, using ORYN's DINOv2 vectors (OpenCLIP only) | ≈ 3.1 h | overlapped | ≈ 3.2 h | ≈ 6.5 h |
-| laptop GPU (RTX-class, CUDA) | ~3–6 min (≈300–600 chips/s) | ~42 min on home bandwidth | **≈ 45 min** | ≈ 1.5 h |
-| Colab T4 GPU | ~12 min (≈150 chips/s) | likely faster cloud-to-cloud (not measured) | **≈ 20–30 min** | ≈ 1 h |
+### A/B: CLIP sub-crops (UNC Charlotte slice, NAIP 2022, 342 chips, 2026-11-07)
+| | embed time (CPU, 8 threads) | `search_text("swimming pool")` top 24: pools by eye (clear / incl. possible) |
+|---|---|---|
+| whole chip only | 79 s (4.4 chips/s) | **6 / 8** |
+| whole + 2×2 sub-crops | 208 s (1.6 chips/s), 2.6× | **6 / 9** |
+Decision rule: adopt only if sub-crops add ≥ 3 pools. They added 0 clear pools, so they are dropped everywhere.
+Sheets: `data/out/ab_unc_charlotte_{whole,subcrops}.png`.
 
-**Decision:** the CPU estimate (~7 h per year) is well over the 3-hour limit, and this PC is the production machine:
-its GPU must not be used, and a 7-hour CPU job would compete with ORYN. So **the precompute was not started here.**
-The fastest option is a GPU box: the laptop over SSH, or Colab. On GPU the job is download-bound, so ORYN's DINOv2 vectors
-would save only minutes and aren't worth a production DB export or a grid change.
+## Cost per year (107,770 chips, 54 NAIP scenes)
+| | value |
+|---|---|
+| storage per chip | ~17 KB JPEG + 24.6 KB DINOv2 cells + 1 KB CLIP ≈ **43 KB** |
+| shards per year | ≈ **4.6 GB** (+ index build: dino.npy 2.6 GB, FAISS ≈ 2.7 GB, thumbs ≈ 1.8 GB) |
+| NAIP download | ≈ 25 GB per year, streamed one scene at a time (~470 MB each, deleted after use) |
+| this PC, CPU only | ~7 h per year. **Not used** (production machine) |
+| Colab T4 (CUDA) | **2022**. Estimated ~20–40 min embedding + download |
+| Mac mini (Apple Silicon, MPS) | **2020**, at low priority |
 
-## Run on another machine (CUDA)
-```bash
-git clone https://github.com/sensordyme-debug/groundtruth && cd groundtruth
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[ml]"          # CUDA torch: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-python scripts/fetch_boundary_naip.py
-python scripts/precompute_county.py --aoi county --year 2022 --batch 128    # resumable; re-run to continue
-python scripts/precompute_county.py --aoi county --year 2020 --batch 128
-# copy back: data/precompute/chips224s192-g0.6-v1/county/<year>/{chips.parquet,dino.*,clip.*,thumbs.*,index.json}
-```
-The device is picked automatically (cuda → mps → cpu); `GROUNDTRUTH_DEVICE` overrides it. Each scene is one work unit,
-written atomically to `shards/<scene>.parquet`. A crashed or interrupted run resumes from the next unfinished scene,
-and failed reads are retried 3× with a fresh download.
+## Run elsewhere
+- **Colab (2022):** `notebooks/precompute_colab.ipynb`. It is self-contained and resumable, and writes shards to the Colab disk.
+  It zips them into parts with a SHA-256 manifest. Download the parts and the manifest into `data/incoming/2022/`, then run
+  `python scripts/verify_shards.py data/incoming/2022` to check the hashes, unpack, and build the index.
+- **Any CUDA/MPS box:** `python scripts/precompute_county.py --aoi county --year <year> --batch 64`.
+  It is resumable at scene granularity and retries failed reads 3×. The device is picked automatically (cuda → mps → dml → cpu).

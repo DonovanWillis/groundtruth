@@ -35,8 +35,13 @@ def sheet(eng: Engine, env, path: Path, cols: int = 6, title: str = "") -> None:
         y = head + pad + (n // cols) * (tile + pad + 16)
         img.paste(th, (x, y))
         p = f["properties"]
-        extra = f" g{p['group_size']}" if "group_size" in p else ""
-        d.text((x + 2, y + tile + 2), f"#{p['rank']} {p['score']:.3f}{extra} {f['id'][5:]}", fill=(200, 200, 200))
+        if "cell" in p:  # outline the matching 56 px sub-cell
+            r, c = divmod(int(p["cell"]), eng.index.grid)
+            cp = tile // eng.index.grid
+            ImageDraw.Draw(img).rectangle([x + c * cp, y + r * cp, x + (c + 1) * cp - 1, y + (r + 1) * cp - 1],
+                                          outline=(255, 70, 70), width=2)
+        extra = f" {p['sense_label']}" if "sense_label" in p else f" {f['id'][5:]}"
+        d.text((x + 2, y + tile + 2), f"#{p['rank']} {p['score']:.3f}{extra}", fill=(200, 200, 200))
     path.parent.mkdir(parents=True, exist_ok=True)
     img.save(path)
     print("wrote", path)
@@ -54,9 +59,12 @@ def main() -> None:
     sheet(eng, st, OUT / f"{a.aoi}_search_text_{slug}_top24.png", title=f"search_text('{a.query}') top 24 · {a.aoi}")
     pc = eng.pick_candidates(a.query)
     sheet(eng, pc, OUT / f"{a.aoi}_pick_candidates_{slug}.png", cols=6, title=f"pick_candidates('{a.query}')")
-    ex = a.pick_chip or st.result.geojson["features"][0]["id"]
+    picks = pc.result.geojson["features"]
+    pool_pick = next((f for f in picks if "pool" in f["properties"].get("sense_id", "")), None)
+    ex = a.pick_chip or (pool_pick["properties"]["example"] if pool_pick else st.result.geojson["features"][0]["id"])
     fs = eng.find_similar([ex], k=24)
-    sheet(eng, fs, OUT / f"{a.aoi}_find_similar_{ex}.png", title=f"find_similar([{ex}]) top 24")
+    safe = ex.replace("#", "_c")
+    sheet(eng, fs, OUT / f"{a.aoi}_find_similar_{safe}.png", title=f"find_similar([{ex}]) top 24 (red box = matching cell)")
     summary = {name: {"status": e.status, "metrics": e.result.metrics, "steps": [s.model_dump() for s in e.steps],
                       "ids": [f["id"] for f in e.result.geojson["features"]]}
                for name, e in (("search_text", st), ("pick_candidates", pc), ("find_similar", fs))}

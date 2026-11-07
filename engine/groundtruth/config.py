@@ -16,11 +16,12 @@ CHIP_M = CHIP_PX * GSD_M
 STRIDE_M = STRIDE_PX * GSD_M
 INDEX_VERSION = "chips224s192-g0.6-v2cells"
 
-# Sub-chip vectors (v2): DINOv2 patch tokens pooled to a CELL_GRID x CELL_GRID grid (16 cells of 56 px = 33.6 m);
-# OpenCLIP on the whole chip + 2x2 quadrant crops upsampled to 224 (CLIP_SUBCROPS=True).
+# Locked storage format v2 (docs/PRECOMPUTE.md): DINOv2 patch tokens pooled to a CELL_GRID x CELL_GRID grid
+# (16 cells of 56 px = 33.6 m, fp16) + whole-chip OpenCLIP (fp16). The 2x2 CLIP sub-crops measured 2.6x the
+# embedding time on the slice (> 2x limit), so they are OFF.
 CELL_GRID = 4
 CELL_PX = CHIP_PX // CELL_GRID
-CLIP_SUBCROPS = True
+CLIP_SUBCROPS = os.environ.get("GROUNDTRUTH_CLIP_SUBCROPS", "0") == "1"
 
 SENSES_PATH = Path(__file__).resolve().parent / "conf" / "senses.json"
 
