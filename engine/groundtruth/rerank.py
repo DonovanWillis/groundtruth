@@ -80,7 +80,7 @@ class PatchCache:
             self.d.popitem(last=False)
 
 
-_CACHE = PatchCache()
+_CACHE = PatchCache(int(__import__("os").environ.get("GROUNDTRUTH_PATCH_CACHE", "300")))  # ~0.55 MB per chip
 
 
 def patch_tokens(index: ChipIndex, rows: Sequence[int], batch: int = 64) -> tuple[np.ndarray, np.ndarray, str]:

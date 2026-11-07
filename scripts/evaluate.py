@@ -142,21 +142,57 @@ def main() -> None:
                                  "lookalikes_nearby": look_near,
                                  "outline_iou_vs_osm_median": round(float(np.median(ious)), 3) if ious else None,
                                  "outline_iou_n": len(ious)}
-        # OSM recall inside the main label cluster box (pools)
-        if tm and osm:
-            lons = [x["lonlat"][0] for x in tm]; lats = [x["lonlat"][1] for x in tm]
-            bb = [float(np.median(lons)) - 0.01, float(np.median(lats)) - 0.008,
-                  float(np.median(lons)) + 0.01, float(np.median(lats)) + 0.008]
+        # look-alike rejection: for each look-alike label, search a box around it from up to 3 true-match examples;
+        # rejected = the look-alike's cell is NOT among the top k
+        if tm and la:
+            exs = [f"{eng.index.ids[x['cell'][0]]}#{x['cell'][1]}" for x in tm[:3]]
+            rej = 0
+            for x in la:
+                lon, lat = x["lonlat"]
+                bb = [lon - 0.009, lat - 0.007, lon + 0.009, lat + 0.007]
+                env = eng.find_all(exs, k=k, bbox=bb, concept=c, rerank=True, outline_top=0)
+                lb = box(*eng.index.cell_bounds_m(*x["cell"]))
+                hit = any(lb.intersects(box(*eng.index.cell_bounds_m(eng.index.pos[f["properties"]["chip_id"]],
+                                                                      f["properties"]["cell"])))
+                          for f in env.result.geojson["features"])
+                rej += not hit
+            r["lookalike_rejection_direct"] = {"lookalikes": len(la), "rejected": rej, "rate": round(rej / len(la), 3)}
+        # OSM recall + outline IoU in a well-mapped place (pools: Ballantyne; parking: Uptown), OSM examples excluded
+        place = {"swimming_pool": "Ballantyne", "parking_lot": "Uptown"}.get(c)
+        if place and osm:
+            bb = eng.place_bbox(place)
             bbm = to_measure(box(*bb))
-            in_box = [o for o in osm_m if o.intersects(bbm)]
-            x = tm[0]
-            env = eng.find_all([f"{eng.index.ids[x['cell'][0]]}#{x['cell'][1]}"], k=200, bbox=bb, concept=c,
-                               rerank=True, outline_top=0)
-            cells = [to_measure(box(*f["properties"]["cell_bbox"])) for f in env.result.geojson["features"]]
-            found = sum(1 for o in in_box if any(o.intersects(cb) for cb in cells))
-            r["osm_recall_top200_in_cluster_box"] = {"osm_objects": len(in_box), "found": found,
-                                                     "recall": round(found / len(in_box), 3) if in_box else None,
-                                                     "bbox": [round(v, 4) for v in bb]}
+            in_box = [o for o in osm_m if o.intersects(bbm) and o.area > 5]
+            sizes = sorted(in_box, key=lambda o: o.area)
+            mid = sizes[len(sizes) // 2: len(sizes) // 2 + 3]  # 3 typical-size mapped objects as examples
+            ex_cells = []
+            for o in mid:
+                from groundtruth.geo import to_wgs84
+                p = to_wgs84(o.centroid)
+                lc = label_cell(eng.index, p.x, p.y)
+                if lc:
+                    ex_cells.append(f"{eng.index.ids[lc[0]]}#{lc[1]}")
+            targets = [o for o in in_box if o not in mid]
+            env = eng.find_all(ex_cells, k=200, bbox=bb, concept=c, rerank=True, outline_top=0)
+            feats = env.result.geojson["features"]
+            cells = [to_measure(box(*f["properties"]["cell_bbox"])) for f in feats]
+            found = sum(1 for o in targets if any(o.intersects(cb) for cb in cells))
+            r["osm_recall_top200_in_place"] = {"place": place, "osm_objects": len(targets), "found": found,
+                                               "recall": round(found / len(targets), 3) if targets else None,
+                                               "note": "recall over OSM-mapped objects only; OSM is incomplete"}
+            # outline IoU vs OSM polygons for the top hits that overlap one
+            over = [f for f, cb in zip(feats, cells) if any(o.intersects(cb) for o in targets)][:30]
+            if over:
+                ol = eng.outline([f["properties"]["example"] for f in over], max=30)
+                ious = []
+                for f in ol.result.geojson["features"]:
+                    if not f.get("geometry"):
+                        continue
+                    g = to_measure(shape(f["geometry"]))
+                    best = max((g.intersection(o).area / max(g.union(o).area, 1e-9) for o in targets if o.intersects(g)), default=0)
+                    ious.append(best)
+                r["outline_iou_vs_osm"] = {"n": len(ious), "median": round(float(np.median(ious)), 3) if ious else None,
+                                           "mean": round(float(np.mean(ious)), 3) if ious else None}
         results[c] = r
         print(c, json.dumps(r)[:400])
     out = {"generated": datetime.now().astimezone().isoformat(timespec="seconds"), "aoi": a.aoi, "year": eng.year,
@@ -180,7 +216,7 @@ def write_md(o: dict) -> None:
          "**lower bounds**. `labels only` ignores OSM. find_all is leave-one-out from each true-match label, searched in a "
          "~1.6 × 1.5 km box around it. Look-alike rejection = share of nearby look-alike labels that do *not* appear in the "
          "top k.", "",
-         "| concept | labels T/L (in index) | search_text P@k (labels+OSM / labels) | find_all P@k (labels+OSM / labels) | look-alike rejection | intended meaning in 6 picks | OSM recall top 200 (cluster box) | outline IoU vs OSM (median, n) |",
+         "| concept | labels T/L (in index) | search_text P@k (labels+OSM / labels) | find_all P@k, leave-one-out (labels+OSM / labels) | look-alike rejection (direct) | intended meaning in 6 picks | OSM recall, top 200 in place | outline IoU vs OSM (median, n) |",
          "|---|---|---|---|---|---|---|---|"]
     for c, r in o["results"].items():
         lab = r["labels"]
@@ -188,14 +224,28 @@ def write_md(o: dict) -> None:
             L.append(f"| {c} | {lab['true_match']}/{lab['look_alike']} | – | – | – | – | – | – |")
             continue
         st, fa = r["search_text"], r.get("find_all_loo", {})
-        rec = r.get("osm_recall_top200_in_cluster_box", {})
+        rec = r.get("osm_recall_top200_in_place", {})
+        lr = r.get("lookalike_rejection_direct", {})
+        iou = r.get("outline_iou_vs_osm", {})
         L.append(f"| {c} | {lab['true_match']}/{lab['look_alike']} ({lab['true_in_index']}/{lab['lookalike_in_index']}) | "
                  f"{st['P@k_labels_or_osm']} / {st['P@k_labels_only']} | "
-                 f"{fa.get('P@k_labels_or_osm', '–')} / {fa.get('P@k_labels_only', '–')} | {fa.get('lookalike_rejection', '–')} "
-                 f"({fa.get('lookalikes_nearby', 0)} nearby) | {'yes' if r['pick_candidates']['intended_in_6'] else 'no'} | "
-                 f"{rec.get('found', '–')}/{rec.get('osm_objects', '–')} ({rec.get('recall', '–')}) | "
-                 f"{fa.get('outline_iou_vs_osm_median', '–')} ({fa.get('outline_iou_n', 0)}) |")
-    L += ["", "Reproduce: `bash scripts/gtg.sh python scripts/evaluate.py --aoi county` (raw numbers in `data/out/evaluation.json`)."]
+                 f"{fa.get('P@k_labels_or_osm', '–')} / {fa.get('P@k_labels_only', '–')} ({fa.get('queries', 0)} queries) | "
+                 f"{(str(lr['rejected']) + '/' + str(lr['lookalikes']) + ' (' + str(lr['rate']) + ')') if lr else '–'} | "
+                 f"{'yes' if r['pick_candidates']['intended_in_6'] else 'no'} | "
+                 f"{(rec.get('place', '') + ': ' + str(rec.get('found')) + '/' + str(rec.get('osm_objects')) + ' (' + str(rec.get('recall')) + ')') if rec else '–'} | "
+                 f"{iou.get('median', '–')} ({iou.get('n', 0)}) |")
+    L += ["", "**Reading the numbers honestly**",
+          "- *Intended meaning in 6 picks* uses the same lower-bound rule. A tile counts only if its cell is labelled or OSM-mapped, "
+          "so a correct 'backyard pool' tile on an unlabelled, unmapped pool scores *no*. Check `data/out/*pick_candidates*.png` by eye.",
+          "- *find_all leave-one-out* draws its queries from the Lake Norman cluster (the bias above).",
+          "- *Look-alike rejection* tests each look-alike label directly: a box around it, searched from 3 true-match examples. "
+          "The look-alikes are lake water, blue roofs and tennis courts.",
+          "- *OSM recall* counts only OSM-mapped objects in the place; most backyard pools are unmapped, so it can't measure "
+          "precision. The 3 typical-size mapped objects used as examples are excluded.",
+          "- *Outline IoU* compares SAM 2.1 outlines prompted by one 16.8 m cell with OSM polygons. For pools the outline often "
+          "includes the pool deck. For parking lots, one cell prompt outlines only part of a large lot, so IoU is low by design.",
+          "- By-eye top-24 counts for the re-rank (county) are in `docs/STATUS_FOR_MONISH.md` and the build log.",
+          "", "Reproduce: `bash scripts/gtg.sh python scripts/evaluate.py --aoi county` (raw numbers in `data/out/evaluation.json`)."]
     (ROOT / "docs" / "EVALUATION.md").write_text("\n".join(L) + "\n")
 
 

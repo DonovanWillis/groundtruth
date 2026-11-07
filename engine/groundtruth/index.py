@@ -78,9 +78,17 @@ class ChipIndex:
         return int(cand[int(np.argmin(sims))])
 
     def _faiss(self, name: str):
+        """Memory-mapped when the FAISS build supports it (codes stay in the reclaimable page cache, not process RAM)."""
         import faiss
 
-        return faiss.read_index(str(self.root / f"{name}.faiss"))
+        p = str(self.root / f"{name}.faiss")
+        flag = getattr(faiss, "IO_FLAG_MMAP", 0) | getattr(faiss, "IO_FLAG_READ_ONLY", 0)
+        if flag:
+            try:
+                return faiss.read_index(p, flag)
+            except Exception:
+                pass
+        return faiss.read_index(p)
 
     @cached_property
     def dino_index(self):

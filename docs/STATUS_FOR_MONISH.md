@@ -23,7 +23,26 @@
 | county precompute 2022 | scene 21/51 at 17:14, ~2.6 min/scene, ETA ~18:35; 2020 after that (~20:20) |
 | county evaluation | PENDING (needs the county index) |
 
-## ⚠ 17:16: memory pressure on this PC (read first)
+## Resume run (18:44 →): county results
+- **County 2022 index verified:** 54/54 scenes, **107,770 chips**, 11.9 GB, built 18:14. 2020 started automatically at 18:14
+  (scene 15/54 at 18:42, ETA ~20:40).
+- **Memory 18:44:** Windows 3.4 GB free of 31.9; WSL 12.5 GB available. Mine: 2020 precompute 5.4 GB, GPU API 2.2 GB → 5.3 GB
+  once the county loaded (FAISS can't mmap from /mnt/c). Windows free fell to 1.0 GB, so I **stopped my API** for the
+  standalone steps (back to 2.6 GB free). Not mine (left alone): Cursor server, next-server, ORYN front.mjs.
+- **County latency (warm, API on GPU, sharing it with the 2020 precompute):** pick 1.9 s · find_all county-wide 3.5 s ·
+  find_all Ballantyne 3.1 s · refine 420–460 ms.
+- **Re-rank on the county (3 backyard pools, top 24, by eye):** Ballantyne ~5–7 → **~21**; Lake Norman → **~19–21** with re-rank.
+  The misses are blue tennis/sport courts, a blue roof and one ambiguous teal structure. Re-rank cost 5–12 s cold (thumbnail reads
+  from /mnt/c + shared GPU). Sheets: `data/out/county_rerank_*.png`.
+- **Evaluation (county, `docs/EVALUATION.md`):** pools: search_text P@24 0.58 (labels+OSM, lower bound) · find_all
+  leave-one-out P@24 0.45 · look-alike rejection 3/5 · OSM recall in Ballantyne top 200: 16/25 (64%) · outline IoU vs OSM
+  median 0.29 (outlines include the deck). Parking: OSM recall Uptown 141/407, IoU 0.09 (one cell outlines part of a lot).
+  **Biased:** 51 of 59 pool labels are at Lake Norman.
+- **ASUS laptop: STOPPED as instructed.** WSL has only Docker Desktop's internal `docker-desktop` distro (stopped), no
+  Linux distro, so installing Ubuntu is your call. Laptop: 47.2 GB free of 63.2, 16 logical cores, 588 GB free disk. Nothing
+  installed or changed there.
+
+## ⚠ 17:16: memory pressure on this PC (earlier)
 - Windows had **2.3 GB free of 31.9 GB**. Claude Code stopped two of my background tasks for that reason: the county-index
   **watcher** and the **tile-cache warm** (part done). I have **not** restarted them and started nothing new.
 - Still running and healthy at 17:16: the county precompute (2022, scene 21/51; ~5.1 GB RSS), the API (~2.3 GB) and the
