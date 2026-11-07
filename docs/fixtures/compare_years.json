@@ -1,0 +1,248 @@
+{
+ "request": {
+  "method": "POST",
+  "path": "/api/v1/tools/compare_years",
+  "body": {
+   "aoi": "south_charlotte",
+   "year": 2022,
+   "examples": [
+    "2022_e4477_n33672#14",
+    "2022_e4478_n33677#3",
+    "2022_e4477_n33675#31",
+    "2022_e4481_n33683#43",
+    "2022_e4478_n33678#50",
+    "2022_e4482_n33669#49",
+    "2022_e4477_n33670#21",
+    "2022_e4477_n33671#55",
+    "2022_e4477_n33681#15",
+    "2022_e4477_n33673#13",
+    "2022_e4478_n33683#8",
+    "2022_e4484_n33670#13"
+   ],
+   "from_year": 2020,
+   "concept": "swimming_pool"
+  }
+ },
+ "response": {
+  "tool": "compare_years",
+  "version": "0.2.0",
+  "status": "partial",
+  "result": {
+   "geojson": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "id": "2022_e4477_n33672",
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.82728313389417,
+          35.05372087337452
+         ],
+         [
+          -80.82580675322892,
+          35.05372087337452
+         ],
+         [
+          -80.82580675322892,
+          35.054934908368914
+         ],
+         [
+          -80.82728313389417,
+          35.054934908368914
+         ],
+         [
+          -80.82728313389417,
+          35.05372087337452
+         ]
+        ]
+       ]
+      },
+      "properties": {
+       "chip_id": "2022_e4477_n33672",
+       "year": 2022,
+       "scene_id": "nc_m_3508058_sw_17_060_20220602",
+       "thumb_url": "/api/v1/chips/2022_e4477_n33672.jpg",
+       "chip_bbox": [
+        -80.82728313389417,
+        35.05372087337452,
+        -80.82580675322892,
+        35.054934908368914
+       ],
+       "cell": 14,
+       "cell_bbox": [
+        -80.8261759,
+        35.0546301,
+        -80.8259913,
+        35.0547818
+       ],
+       "change": "existing",
+       "from_year": 2020,
+       "change_sim": 0.769,
+       "colour_now": 0.827,
+       "colour_then": 0.291,
+       "thumb_url_then": "/api/v1/chips/2020_e4477_n33672.jpg?year=2020"
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "2022_e4478_n33677",
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.8260088534576,
+          35.05891302660923
+         ],
+         [
+          -80.82453236027052,
+          35.05891302660923
+         ],
+         [
+          -80.82453236027052,
+          35.0601270762361
+         ],
+         [
+          -80.8260088534576,
+          35.0601270762361
+         ],
+         [
+          -80.8260088534576,
+          35.05891302660923
+         ]
+        ]
+       ]
+      },
+      "properties": {
+       "chip_id": "2022_e4478_n33677",
+       "year": 2022,
+       "scene_id": "nc_m_3508058_sw_17_060_20220602",
+       "thumb_url": "/api/v1/chips/2022_e4478_n33677.jpg",
+       "chip_bbox": [
+        -80.8260088534576,
+        35.05891302660923,
+        -80.82453236027052,
+        35.0601270762361
+       ],
+       "cell": 3,
+       "cell_bbox": [
+        -80.8254539,
+        35.0599745,
+        -80.8252693,
+        35.0601263
+       ],
+       "change": "existing",
+       "from_year": 2020,
+       "change_sim": 0.732,
+       "colour_now": 0.842,
+       "colour_then": 0.092,
+       "thumb_url_then": "/api/v1/chips/2020_e4478_n33677.jpg?year=2020"
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "2022_e4477_n33675",
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.82727657192476,
+          35.05683725832728
+         ],
+         [
+          -80.82580013487129,
+          35.05683725832728
+         ],
+         [
+          -80.82580013487129,
+          35.058051292939766
+         ],
+         [
+          -80.82727657192476,
+          35.058051292939766
+         ],
+         [
+          -80.82727657192476,
+          35.05683725832728
+         ]
+        ]
+       ]
+      },
+      "properties": {
+       "chip_id": "2022_e4477_n33675",
+       "year": 2022,
+       "scene_id": "nc_m_3508058_sw_17_060_20220602",
+       "thumb_url": "/api/v1/chips/2022_e4477_n33675.jpg",
+       "chip_bbox": [
+        -80.82727657192476,
+        35.05683725832728,
+        -80.82580013487129,
+        35.058051292939766
+       ],
+       "cell": 31,
+       "cell_bbox": [
+        -80.8259857,
+        35.0574432,
+        -80.8258011,
+        35.057595
+       ],
+       "change": "existing",
+       "from_year": 2020,
+       "change_sim": 0.759,
+       "colour_now": 0.694,
+       "colour_then": 0.041,
+       "thumb_url_then": "/api/v1/chips/2020_e4477_n33675.jpg?year=2020"
+      }
+     }
+    ]
+   },
+   "metrics": {
+    "new": 3,
+    "existing": 8,
+    "unsure": 1,
+    "no_data": 0,
+    "from_year": 2020,
+    "to_year": 2022,
+    "concept": "swimming_pool"
+   }
+  },
+  "confidence": null,
+  "method": "Same 16.8 m cell in NAIP 2020 vs 2022 (fixed EPSG:32617 grid, shared PCA basis): DINOv2 cell cosine; concept colour fraction then vs now (HSV range from conf/concepts.json); thresholds {'colour_now_min': 0.15, 'colour_then_keep': 0.5, 'sim_new_max': 0.6, 'sim_existing_min': 0.72, '_doc': 'Cross-year cell similarity is the primary signal (radiometry differs between NAIP years, so colour then is only supporting evidence). new = colour now >= colour_now_min AND sim <= sim_new_max; existing = sim >= sim_existing_min OR colour then >= colour_then_keep x colour now; else unsure.'}",
+  "assumptions": [
+   "The 2020 and 2022 orthoimages are co-registered to within ~1\u20132 m"
+  ],
+  "limits": [
+   "NAIP 2022 at 0.6 m/px: objects smaller than ~3 m are not resolvable",
+   "Scores are embedding similarities, not calibrated probabilities",
+   "Hits are 33.6 m sub-cells of 134 m chips, not object outlines (use `outline`)",
+   "Only the 'south_charlotte' area is indexed, not the whole county",
+   "NAIP 2020 and 2022 differ in season, sun angle and colour balance; covered or drained pools look 'not a pool'",
+   "'new' means the concept's appearance is present now and absent then in this cell, not a permit or construction date",
+   "unsure = signals disagree; treat as needing a look"
+  ],
+  "sources": [
+   {
+    "name": "USDA NAIP 2022",
+    "url": "https://planetarycomputer.microsoft.com/dataset/naip",
+    "date": "2022-06-02/2022-09-27",
+    "licence": "Public domain (USDA FSA NAIP); hosted by Microsoft Planetary Computer (PC Terms of Use)"
+   }
+  ],
+  "steps": [
+   {
+    "phase": "compare",
+    "detail": "12 cells vs 2020 (cell similarity + colour)",
+    "ms": 265.51
+   }
+  ],
+  "declined_reason": null,
+  "_fixture": {
+   "truncated_features": 0
+  }
+ }
+}

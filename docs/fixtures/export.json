@@ -195,7 +195,8 @@
    "metrics": {
     "count": 5,
     "format": "csv",
-    "file": "data/out/exports/export_20261107T160216_5.csv",
+    "file": "data/out/exports/export_20261107T165350_5.csv",
+    "download": "/api/v1/exports/export_20261107T165350_5.csv",
     "bytes": 254,
     "content": "id,lon,lat,score\n2022_e4481_n33670,-80.8215883,35.0523188,0.7465\n2022_e4481_n33678,-80.8215706,35.0604777,0.7252\n2022_e4475_n33669,-80.8291703,35.0511395,0.7195\n2022_e4478_n33669,-80.825197,35.0508308,0.719\n2022_e4475_n33670,-80.8293527,35.052027,0.7165\n"
    }
@@ -209,7 +210,7 @@
    {
     "phase": "serialise",
     "detail": "csv",
-    "ms": 3.9
+    "ms": 5.62
    }
   ],
   "declined_reason": null

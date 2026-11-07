@@ -183,11 +183,13 @@
    "metrics": {
     "count": 12,
     "positives": 1,
-    "negatives": 1
+    "negatives": 1,
+    "reranked": false,
+    "bbox": null
    }
   },
   "confidence": null,
-  "method": "DINOv2 ViT-B/14 4\u00d74 sub-cell cosine (best cell per chip); query = mean(positive cells) \u2212 0.5\u00b7mean(negative cells)",
+  "method": "DINOv2 ViT-B/14 8\u00d78-cell (16.8 m, PCA-192) cosine, best cell per chip; query = mean(positive cells) \u2212 0.5\u00b7mean(negative cells)",
   "assumptions": [
    "The example cells show the intended object"
   ],
@@ -209,17 +211,17 @@
    {
     "phase": "query_vector",
     "detail": "1 positive cells, 1 negative cells, \u03bb=0.5",
-    "ms": 0.17
+    "ms": 0.31
    },
    {
     "phase": "search",
-    "detail": "best-matching cell over 17408 cells",
-    "ms": 39.41
+    "detail": "best-matching 16.8 m cell over 272 chips",
+    "ms": 64.49
    },
    {
     "phase": "dedupe",
-    "detail": "cell NMS (overlapping chips)",
-    "ms": 0.13
+    "detail": "cell NMS (same object in overlapping chips)",
+    "ms": 0.08
    }
   ],
   "declined_reason": null,

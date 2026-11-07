@@ -223,7 +223,7 @@
       "properties": {
        "score": 0.7465,
        "area_m2": 283.05,
-       "area_acres": 0.0699,
+       "area_acres": 0.06994,
        "perimeter_m": 67.3
       }
      },
@@ -260,7 +260,7 @@
       "properties": {
        "score": 0.7252,
        "area_m2": 283.37,
-       "area_acres": 0.07,
+       "area_acres": 0.07002,
        "perimeter_m": 67.33
       }
      },
@@ -297,7 +297,7 @@
       "properties": {
        "score": 0.7195,
        "area_m2": 283.24,
-       "area_acres": 0.07,
+       "area_acres": 0.06999,
        "perimeter_m": 67.32
       }
      }
@@ -306,7 +306,8 @@
    "metrics": {
     "count": 5,
     "area_m2_total": 1415.93,
-    "area_acres_total": 0.3499
+    "area_acres_total": 0.3499,
+    "median_area_m2": 283.21
    }
   },
   "confidence": 1.0,
@@ -315,14 +316,15 @@
    "Input geometry is EPSG:4326"
   ],
   "limits": [
-   "UTM 17N distortion < 0.1% in Mecklenburg"
+   "UTM 17N distortion < 0.1% in Mecklenburg",
+   "Distances are to the simplified web build of a layer when one exists (~3 m)"
   ],
   "sources": [],
   "steps": [
    {
     "phase": "measure",
     "detail": "5 features in EPSG:32617",
-    "ms": 3.06
+    "ms": 3.33
    }
   ],
   "declined_reason": null,

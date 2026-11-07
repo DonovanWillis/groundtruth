@@ -406,8 +406,8 @@
   "steps": [
    {
     "phase": "sam2",
-    "detail": "1 outlines (SAM 2.1 hiera-tiny, cpu)",
-    "ms": 2.98
+    "detail": "1 outlines (SAM 2.1 hiera-tiny, cuda)",
+    "ms": 3.17
    }
   ],
   "declined_reason": null

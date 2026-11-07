@@ -20,6 +20,11 @@
    "version": "0.2.0"
   },
   {
+   "tool": "find_all",
+   "implemented": true,
+   "version": "0.2.0"
+  },
+  {
    "tool": "refine",
    "implemented": true,
    "version": "0.2.0"
@@ -46,6 +51,11 @@
   },
   {
    "tool": "outline",
+   "implemented": true,
+   "version": "0.2.0"
+  },
+  {
+   "tool": "compare_years",
    "implemented": true,
    "version": "0.2.0"
   }

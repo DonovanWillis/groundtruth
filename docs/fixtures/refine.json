@@ -73,7 +73,12 @@
         35.0659048
        ],
        "score": 0.5622,
-       "rank": 1
+       "rank": 1,
+       "confidence": 0.562,
+       "why": {
+        "nearest_accepted": "2022_e4481_n33670#27",
+        "similarity": 0.795
+       }
       }
      },
      {
@@ -125,7 +130,12 @@
         35.065895
        ],
        "score": 0.5507,
-       "rank": 2
+       "rank": 2,
+       "confidence": 0.551,
+       "why": {
+        "nearest_accepted": "2022_e4481_n33670#27",
+        "similarity": 0.721
+       }
       }
      },
      {
@@ -177,18 +187,23 @@
         35.059969
        ],
        "score": 0.5495,
-       "rank": 3
+       "rank": 3,
+       "confidence": 0.549,
+       "why": {
+        "nearest_accepted": "2022_e4481_n33670#27",
+        "similarity": 0.634
+       }
       }
      }
     ]
    },
    "metrics": {
     "count": 12,
-    "session_id": "e9cf6288c05f",
+    "session_id": "edcc24efcdd6",
     "accepted": 2,
     "rejected": 2,
     "pool_chips": 268,
-    "refine_ms": 42.0
+    "refine_ms": 308.9
    }
   },
   "confidence": null,
@@ -213,18 +228,23 @@
   "steps": [
    {
     "phase": "pool",
-    "detail": "centroid query \u2192 top 1500 chips",
-    "ms": 10.6
+    "detail": "cell search from the first accepted example \u2192 1500 chips",
+    "ms": 41.45
    },
    {
     "phase": "fit",
     "detail": "logistic regression: 2 accepted, 2 rejected + background",
-    "ms": 16.64
+    "ms": 239.38
    },
    {
     "phase": "score",
     "detail": "268 chips \u00d7 64 cells",
-    "ms": 14.74
+    "ms": 24.91
+   },
+   {
+    "phase": "why",
+    "detail": "nearest accepted example per hit",
+    "ms": 3.16
    }
   ],
   "declined_reason": null,
