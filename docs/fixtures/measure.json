@@ -322,7 +322,7 @@
    {
     "phase": "measure",
     "detail": "5 features in EPSG:32617",
-    "ms": 3.15
+    "ms": 2.19
    }
   ],
   "declined_reason": null,

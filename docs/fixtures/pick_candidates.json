@@ -262,22 +262,22 @@
    {
     "phase": "embed_query",
     "detail": "raw query + 6 sense prompts (swimming_pool)",
-    "ms": 439.19
+    "ms": 400.45
    },
    {
     "phase": "candidate_pool",
     "detail": "top 200 raw + top 40 per sense",
-    "ms": 3.55
+    "ms": 4.13
    },
    {
     "phase": "pick",
     "detail": "one per sense, DINOv2 cell diversity cos<0.8",
-    "ms": 1.58
+    "ms": 1.52
    },
    {
     "phase": "localise",
     "detail": "OpenCLIP on 16 context crops \u00d7 6 tiles (sense-specific)",
-    "ms": 40377.71
+    "ms": 37967.47
    }
   ],
   "declined_reason": null,

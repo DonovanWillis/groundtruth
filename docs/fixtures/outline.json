@@ -13,20 +13,112 @@
  "response": {
   "tool": "outline",
   "version": "0.2.0",
-  "status": "declined",
+  "status": "ok",
   "result": {
    "geojson": {
     "type": "FeatureCollection",
-    "features": []
+    "features": [
+     {
+      "type": "Feature",
+      "id": "2022_e4477_n33683#28",
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.82649405758153,
+          35.0659439550929
+         ],
+         [
+          -80.82650745893788,
+          35.06583035591151
+         ],
+         [
+          -80.82634975687928,
+          35.06572192228991
+         ],
+         [
+          -80.82630982715705,
+          35.065932870628366
+         ],
+         [
+          -80.82649405758153,
+          35.0659439550929
+         ]
+        ],
+        [
+         [
+          -80.82634937876071,
+          35.065900464872364
+         ],
+         [
+          -80.82633618343722,
+          35.06591667717368
+         ],
+         [
+          -80.82633622927347,
+          35.0658950356489
+         ],
+         [
+          -80.82634937876071,
+          35.065900464872364
+         ]
+        ]
+       ]
+      },
+      "properties": {
+       "chip_id": "2022_e4477_n33683",
+       "cell": 28,
+       "example": "2022_e4477_n33683#28",
+       "sam_score": 0.6949,
+       "model": "sam2.1-hiera-tiny",
+       "ms": 1593.9,
+       "cached": false,
+       "area_m2": 259.2,
+       "area_acres": 0.06405
+      }
+     }
+    ]
    },
-   "metrics": {}
+   "metrics": {
+    "count": 1,
+    "empty": 0,
+    "area_m2_total": 259.2,
+    "area_acres_total": 0.064,
+    "ms_per_outline": 1593.9,
+    "cached": 0
+   }
   },
   "confidence": null,
-  "method": "",
-  "assumptions": [],
-  "limits": [],
-  "sources": [],
-  "steps": [],
-  "declined_reason": "not_implemented"
+  "method": "SAM 2.1 hiera-tiny (Apache-2.0) box prompt = matched 16.8 m cell + 1 cell margin, on the 0.6 m chip; largest mask component overlapping the cell; simplified 0.3 m; areas in EPSG:32617",
+  "assumptions": [
+   "The object of interest is inside the prompted box"
+  ],
+  "limits": [
+   "NAIP 2022 at 0.6 m/px: objects smaller than ~3 m are not resolvable",
+   "Scores are embedding similarities, not calibrated probabilities",
+   "Hits are 33.6 m sub-cells of 134 m chips, not object outlines (use `outline`)",
+   "Only the 'south_charlotte' area is indexed, not the whole county",
+   "Outlines from 0.6 m imagery: edges \u00b11 px (0.6 m)"
+  ],
+  "sources": [
+   {
+    "name": "USDA NAIP 2022",
+    "url": "https://planetarycomputer.microsoft.com/dataset/naip",
+    "date": "2022-06-02/2022-09-27",
+    "licence": "Public domain (USDA FSA NAIP); hosted by Microsoft Planetary Computer (PC Terms of Use)"
+   }
+  ],
+  "steps": [
+   {
+    "phase": "sam2",
+    "detail": "1 outlines (SAM 2.1 hiera-tiny, cpu)",
+    "ms": 1606.45
+   }
+  ],
+  "declined_reason": null,
+  "_fixture": {
+   "geometry_simplified_deg": 0.0001
+  }
  }
 }

@@ -1,4 +1,4 @@
-# Groundtruth API contract — v0.1
+# Groundtruth API contract — v0.2
 
 Every tool, whether an engine function, an HTTP route or an agent action, returns **one envelope**. Implementation:
 `engine/groundtruth/envelope.py` (pydantic, validated). Example responses for every tool: `docs/fixtures/<tool>.json`.
@@ -12,6 +12,8 @@ Every tool, whether an engine function, an HTTP route or an agent action, return
 | tool list | `GET /api/v1/tools` → `[{tool, implemented, version}]` |
 | chip image | `GET /api/v1/chips/{chip_id}.jpg?year=2022` → 224×224 JPEG (this is the `thumb_url` in features) |
 | layers | `GET /api/v1/layers` → `[name]` (inputs to `add_layer`) |
+| display tiles | `GET /api/v1/tiles/naip/{year}/{z}/{x}/{y}.png` (XYZ, z 10–18; USDA NAIP via Planetary Computer, cached) |
+| boundary | `GET /api/v1/boundary` → the Mecklenburg County GeoJSON Feature |
 | agent stream | `GET /api/v1/events` (SSE). **Reserved**; not implemented in v0.1 |
 
 Errors: a tool that will not answer still returns **HTTP 200** with `status: "declined"` and a `declined_reason`.
@@ -68,9 +70,12 @@ built, otherwise the largest indexed slice).
 | `add_layer` | ✅ | `{name: str, bbox?: [w,s,e,n]}` | the reference layer (see `/layers`) |
 | `filter` | ✅ | `{geojson, where: {intersects_layer?, layer_where?, not_intersects_layer?, dist_layer?, max_dist_m?, min_area_acres?, max_area_acres?, min_score?}}` | features passing all predicates; `metrics.count_in, count_out` |
 | `export` | ✅ | `{geojson, format: "geojson"\|"csv"}` | `metrics.file, bytes, content` (inline when < 2 MB) |
-| `outline` | 🚧 `declined: not_implemented` in v0.1 | `{examples: [id with #cell], max?: int=12}` | planned: SAM 2 polygons per hit (`area_m2, area_acres`), lazily computed and cached by `chip#cell` |
+| `outline` | ✅ (v0.2) | `{examples: [id with #cell], max?: int=12}` | one polygon per id (SAM 2.1 hiera-tiny, prompt = cell box + 5 m + centre point). Properties: `area_m2, area_acres, sam_score, ms, cached`; `metrics.area_acres_total, ms_per_outline`. **Lazy:** call it only for results on screen. Cost: ~1.2 s per new outline on CPU, ~4 ms cached. Pools often include part of the deck |
 
 ## Changelog
+- **v0.2 (2026-11-07)**: `outline` implemented (was `declined: not_implemented`). No other request/response changes.
+  The `/health` `contract` field is now `"0.2"`. Also added `GET /api/v1/tiles/naip/{year}/{z}/{x}/{y}.png` (display tiles) and
+  `GET /api/v1/boundary` (county outline).
 - **v0.1.1 (2026-11-07)**: fixtures only, no API change. `add_layer.json` shrank from 1.67 M lines (raw FEMA geometry)
   to 7 KB. Fixture geometries are simplified for readability (`_fixture.geometry_simplified_deg`). `add_layer` serves
   the simplified web build of heavy layers by default (FEMA: regulatory 1% + 0.2% zones, ~3 m simplification).

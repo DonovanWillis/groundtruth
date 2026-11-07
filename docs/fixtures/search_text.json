@@ -207,17 +207,17 @@
    {
     "phase": "embed_query",
     "detail": "OpenCLIP text, 4-prompt ensemble",
-    "ms": 4322.15
+    "ms": 4220.53
    },
    {
     "phase": "search",
     "detail": "max over 1 CLIP views \u00d7 272 chips",
-    "ms": 28.71
+    "ms": 27.78
    },
    {
     "phase": "localise+dedupe",
     "detail": "salient DINOv2 cell in best view; cell NMS",
-    "ms": 45.84
+    "ms": 47.51
    }
   ],
   "declined_reason": null,
