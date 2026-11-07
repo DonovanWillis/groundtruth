@@ -1,0 +1,333 @@
+{
+ "request": {
+  "method": "POST",
+  "path": "/api/v1/tools/measure",
+  "body": {
+   "aoi": "south_charlotte",
+   "year": 2022,
+   "geojson": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "id": "2022_e4480_n33671",
+      "properties": {
+       "score": 0.6644
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.8225738,
+          35.0529801
+         ],
+         [
+          -80.8223893,
+          35.0529801
+         ],
+         [
+          -80.8223893,
+          35.0531319
+         ],
+         [
+          -80.8225738,
+          35.0531319
+         ],
+         [
+          -80.8225738,
+          35.0529801
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "2022_e4481_n33670",
+      "properties": {
+       "score": 0.6547
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.8213122,
+          35.0522424
+         ],
+         [
+          -80.8211276,
+          35.0522424
+         ],
+         [
+          -80.8211276,
+          35.0523942
+         ],
+         [
+          -80.8213122,
+          35.0523942
+         ],
+         [
+          -80.8213122,
+          35.0522424
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "2022_e4478_n33683",
+      "properties": {
+       "score": 0.6375
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.8252577,
+          35.0656011
+         ],
+         [
+          -80.8250731,
+          35.0656011
+         ],
+         [
+          -80.8250731,
+          35.0657528
+         ],
+         [
+          -80.8252577,
+          35.0657528
+         ],
+         [
+          -80.8252577,
+          35.0656011
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "2022_e4477_n33676",
+      "properties": {
+       "score": 0.6116
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.8265365,
+          35.0583313
+         ],
+         [
+          -80.8263519,
+          35.0583313
+         ],
+         [
+          -80.8263519,
+          35.0584831
+         ],
+         [
+          -80.8265365,
+          35.0584831
+         ],
+         [
+          -80.8265365,
+          35.0583313
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "2022_e4483_n33683",
+      "properties": {
+       "score": 0.611
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.8189404,
+          35.0655918
+         ],
+         [
+          -80.8187558,
+          35.0655918
+         ],
+         [
+          -80.8187558,
+          35.0657436
+         ],
+         [
+          -80.8189404,
+          35.0657436
+         ],
+         [
+          -80.8189404,
+          35.0655918
+         ]
+        ]
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "response": {
+  "tool": "measure",
+  "version": "0.2.0",
+  "status": "ok",
+  "result": {
+   "geojson": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "id": "2022_e4480_n33671",
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.8225738,
+          35.0529801
+         ],
+         [
+          -80.8223893,
+          35.0529801
+         ],
+         [
+          -80.8223893,
+          35.0531319
+         ],
+         [
+          -80.8225738,
+          35.0531319
+         ],
+         [
+          -80.8225738,
+          35.0529801
+         ]
+        ]
+       ]
+      },
+      "properties": {
+       "score": 0.6644,
+       "area_m2": 283.24,
+       "area_acres": 0.07,
+       "perimeter_m": 67.32
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "2022_e4481_n33670",
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.8213122,
+          35.0522424
+         ],
+         [
+          -80.8211276,
+          35.0522424
+         ],
+         [
+          -80.8211276,
+          35.0523942
+         ],
+         [
+          -80.8213122,
+          35.0523942
+         ],
+         [
+          -80.8213122,
+          35.0522424
+         ]
+        ]
+       ]
+      },
+      "properties": {
+       "score": 0.6547,
+       "area_m2": 283.39,
+       "area_acres": 0.07,
+       "perimeter_m": 67.34
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "2022_e4478_n33683",
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.8252577,
+          35.0656011
+         ],
+         [
+          -80.8250731,
+          35.0656011
+         ],
+         [
+          -80.8250731,
+          35.0657528
+         ],
+         [
+          -80.8252577,
+          35.0657528
+         ],
+         [
+          -80.8252577,
+          35.0656011
+         ]
+        ]
+       ]
+      },
+      "properties": {
+       "score": 0.6375,
+       "area_m2": 283.16,
+       "area_acres": 0.07,
+       "perimeter_m": 67.31
+      }
+     }
+    ]
+   },
+   "metrics": {
+    "count": 5,
+    "area_m2_total": 1416.52,
+    "area_acres_total": 0.35
+   }
+  },
+  "confidence": 1.0,
+  "method": "Planar measurement after reprojection EPSG:4326 \u2192 EPSG:32617 (UTM 17N)",
+  "assumptions": [
+   "Input geometry is EPSG:4326"
+  ],
+  "limits": [
+   "UTM 17N distortion < 0.1% in Mecklenburg"
+  ],
+  "sources": [],
+  "steps": [
+   {
+    "phase": "measure",
+    "detail": "5 features in EPSG:32617",
+    "ms": 3.07
+   }
+  ],
+  "declined_reason": null,
+  "_fixture": {
+   "truncated_features": 2
+  }
+ }
+}

@@ -1,0 +1,26 @@
+{
+ "request": {
+  "method": "GET",
+  "path": "/api/v1/health"
+ },
+ "response": {
+  "ok": true,
+  "contract": "0.1",
+  "engine_version": "0.2.0",
+  "indexes": [
+   {
+    "aoi": "south_charlotte",
+    "year": 2022,
+    "chips": 272,
+    "index_version": "chips224s192-g0.6-v3c8p192"
+   },
+   {
+    "aoi": "unc_charlotte",
+    "year": 2022,
+    "chips": 342,
+    "index_version": "chips224s192-g0.6-v3c8p192"
+   }
+  ],
+  "primary_year": 2022
+ }
+}

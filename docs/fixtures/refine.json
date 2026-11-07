@@ -1,0 +1,235 @@
+{
+ "request": {
+  "method": "POST",
+  "path": "/api/v1/tools/refine",
+  "body": {
+   "aoi": "south_charlotte",
+   "year": 2022,
+   "accept": [
+    "2022_e4477_n33683#28",
+    "2022_e4480_n33671#45"
+   ],
+   "reject": [
+    "2022_e4482_n33672#27",
+    "2022_e4482_n33668#21"
+   ],
+   "k": 12
+  }
+ },
+ "response": {
+  "tool": "refine",
+  "version": "0.2.0",
+  "status": "partial",
+  "result": {
+   "geojson": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "id": "2022_e4475_n33669",
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.82981612575169,
+          35.050608087830966
+         ],
+         [
+          -80.82833983852699,
+          35.050608087830966
+         ],
+         [
+          -80.82833983852699,
+          35.05182209267685
+         ],
+         [
+          -80.82981612575169,
+          35.05182209267685
+         ],
+         [
+          -80.82981612575169,
+          35.050608087830966
+         ]
+        ]
+       ]
+      },
+      "properties": {
+       "chip_id": "2022_e4475_n33669",
+       "year": 2022,
+       "scene_id": "nc_m_3508058_sw_17_060_20220602",
+       "thumb_url": "/api/chips/2022_e4475_n33669.jpg",
+       "chip_bbox": [
+        -80.82981612575169,
+        35.050608087830966,
+        -80.82833983852699,
+        35.05182209267685
+       ],
+       "cell": 47,
+       "cell_bbox": [
+        -80.828526,
+        35.0509111,
+        -80.8283414,
+        35.0510628
+       ],
+       "score": 0.5691,
+       "rank": 1
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "2022_e4485_n33674",
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.81717240046454,
+          35.05578353048733
+         ],
+         [
+          -80.81569583396468,
+          35.05578353048733
+         ],
+         [
+          -80.81569583396468,
+          35.056997687348385
+         ],
+         [
+          -80.81717240046454,
+          35.056997687348385
+         ],
+         [
+          -80.81717240046454,
+          35.05578353048733
+         ]
+        ]
+       ]
+      },
+      "properties": {
+       "chip_id": "2022_e4485_n33674",
+       "year": 2022,
+       "scene_id": "nc_m_3508058_sw_17_060_20220602",
+       "thumb_url": "/api/chips/2022_e4485_n33674.jpg",
+       "chip_bbox": [
+        -80.81717240046454,
+        35.05578353048733,
+        -80.81569583396468,
+        35.056997687348385
+       ],
+       "cell": 44,
+       "cell_bbox": [
+        -80.8164348,
+        35.0560874,
+        -80.8162502,
+        35.0562391
+       ],
+       "score": 0.5649,
+       "rank": 2
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "2022_e4483_n33669",
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.81971040488207,
+          35.05059336810466
+         ],
+         [
+          -80.81823396943649,
+          35.05059336810466
+         ],
+         [
+          -80.81823396943649,
+          35.051807495057865
+         ],
+         [
+          -80.81971040488207,
+          35.051807495057865
+         ],
+         [
+          -80.81971040488207,
+          35.05059336810466
+         ]
+        ]
+       ]
+      },
+      "properties": {
+       "chip_id": "2022_e4483_n33669",
+       "year": 2022,
+       "scene_id": "nc_m_3508058_sw_17_060_20220602",
+       "thumb_url": "/api/chips/2022_e4483_n33669.jpg",
+       "chip_bbox": [
+        -80.81971040488207,
+        35.05059336810466,
+        -80.81823396943649,
+        35.051807495057865
+       ],
+       "cell": 46,
+       "cell_bbox": [
+        -80.8186044,
+        35.0508966,
+        -80.8184199,
+        35.0510484
+       ],
+       "score": 0.5647,
+       "rank": 3
+      }
+     }
+    ]
+   },
+   "metrics": {
+    "count": 12,
+    "session_id": "43bc7fd45394",
+    "accepted": 2,
+    "rejected": 2,
+    "pool_chips": 268,
+    "refine_ms": 71.7
+   }
+  },
+  "confidence": null,
+  "method": "Logistic regression (sklearn, C=1, balanced) on DINOv2 4\u00d74-cell vectors; positives = accepted cells, negatives = rejected cells + 150 random background cells; scores = P(match) of best cell",
+  "assumptions": [
+   "Accepted/rejected examples are representative"
+  ],
+  "limits": [
+   "NAIP 2022 at 0.6 m/px: objects smaller than ~3 m are not resolvable",
+   "Scores are embedding similarities, not calibrated probabilities",
+   "Hits are 33.6 m sub-cells of 134 m chips, not object outlines (use `outline`)",
+   "Only the 'south_charlotte' area is indexed, not the whole county"
+  ],
+  "sources": [
+   {
+    "name": "USDA NAIP 2022",
+    "url": "https://planetarycomputer.microsoft.com/dataset/naip",
+    "date": "2022-06-02/2022-09-27",
+    "licence": "Public domain (USDA FSA NAIP); hosted by Microsoft Planetary Computer (PC Terms of Use)"
+   }
+  ],
+  "steps": [
+   {
+    "phase": "pool",
+    "detail": "centroid query \u2192 top 1500 chips",
+    "ms": 22.96
+   },
+   {
+    "phase": "fit",
+    "detail": "logistic regression: 2 accepted, 2 rejected + background",
+    "ms": 30.97
+   },
+   {
+    "phase": "score",
+    "detail": "268 chips \u00d7 64 cells",
+    "ms": 17.78
+   }
+  ],
+  "declined_reason": null,
+  "_fixture": {
+   "truncated_features": 9
+  }
+ }
+}

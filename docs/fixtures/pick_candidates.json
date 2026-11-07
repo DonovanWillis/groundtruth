@@ -1,0 +1,288 @@
+{
+ "request": {
+  "method": "POST",
+  "path": "/api/v1/tools/pick_candidates",
+  "body": {
+   "aoi": "south_charlotte",
+   "year": 2022,
+   "query": "swimming pool"
+  }
+ },
+ "response": {
+  "tool": "pick_candidates",
+  "version": "0.2.0",
+  "status": "partial",
+  "result": {
+   "geojson": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "id": "2022_e4477_n33683",
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.82725906841438,
+          35.065147610353364
+         ],
+         [
+          -80.82578248095002,
+          35.065147610353364
+         ],
+         [
+          -80.82578248095002,
+          35.066361643947396
+         ],
+         [
+          -80.82725906841438,
+          35.066361643947396
+         ],
+         [
+          -80.82725906841438,
+          35.065147610353364
+         ]
+        ]
+       ]
+      },
+      "properties": {
+       "chip_id": "2022_e4477_n33683",
+       "year": 2022,
+       "scene_id": "nc_m_3508058_nw_17_060_20220602",
+       "thumb_url": "/api/chips/2022_e4477_n33683.jpg",
+       "chip_bbox": [
+        -80.82725906841438,
+        35.065147610353364,
+        -80.82578248095002,
+        35.066361643947396
+       ],
+       "cell": 28,
+       "cell_bbox": [
+        -80.8265208,
+        35.0657544,
+        -80.8263362,
+        35.0659061
+       ],
+       "score": 0.275,
+       "rank": 1,
+       "raw_score": 0.2803,
+       "sense_id": "backyard_pool",
+       "sense_label": "Backyard pool",
+       "example": "2022_e4477_n33683#28",
+       "group_members": [
+        "2022_e4477_n33683",
+        "2022_e4477_n33670",
+        "2022_e4481_n33671",
+        "2022_e4476_n33673",
+        "2022_e4479_n33669",
+        "2022_e4477_n33672",
+        "2022_e4471_n33683",
+        "2022_e4482_n33669",
+        "2022_e4476_n33668"
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "2022_e4472_n33675",
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.83359312989278,
+          35.05684616426456
+         ],
+         [
+          -80.83211678552745,
+          35.05684616426456
+         ],
+         [
+          -80.83211678552745,
+          35.05806012252904
+         ],
+         [
+          -80.83359312989278,
+          35.05806012252904
+         ],
+         [
+          -80.83359312989278,
+          35.05684616426456
+         ]
+        ]
+       ]
+      },
+      "properties": {
+       "chip_id": "2022_e4472_n33675",
+       "year": 2022,
+       "scene_id": "nc_m_3508058_sw_17_060_20220602",
+       "thumb_url": "/api/chips/2022_e4472_n33675.jpg",
+       "chip_bbox": [
+        -80.83359312989278,
+        35.05684616426456,
+        -80.83211678552745,
+        35.05806012252904
+       ],
+       "cell": 30,
+       "cell_bbox": [
+        -80.8324865,
+        35.0574524,
+        -80.832302,
+        35.0576041
+       ],
+       "score": 0.3104,
+       "rank": 2,
+       "raw_score": 0.2892,
+       "sense_id": "community_pool",
+       "sense_label": "Community / apartment pool",
+       "example": "2022_e4472_n33675#30",
+       "group_members": [
+        "2022_e4472_n33675",
+        "2022_e4482_n33673",
+        "2022_e4478_n33678",
+        "2022_e4473_n33675",
+        "2022_e4485_n33669",
+        "2022_e4475_n33669",
+        "2022_e4482_n33677",
+        "2022_e4484_n33670",
+        "2022_e4470_n33671",
+        "2022_e4473_n33673",
+        "2022_e4470_n33676",
+        "2022_e4484_n33675"
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "2022_e4482_n33672",
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -80.82096681869477,
+          35.05371163960155
+         ],
+         [
+          -80.81949034537965,
+          35.05371163960155
+         ],
+         [
+          -80.81949034537965,
+          35.05492575092031
+         ],
+         [
+          -80.82096681869477,
+          35.05492575092031
+         ],
+         [
+          -80.82096681869477,
+          35.05371163960155
+         ]
+        ]
+       ]
+      },
+      "properties": {
+       "chip_id": "2022_e4482_n33672",
+       "year": 2022,
+       "scene_id": "nc_m_3508058_sw_17_060_20220602",
+       "thumb_url": "/api/chips/2022_e4482_n33672.jpg",
+       "chip_bbox": [
+        -80.82096681869477,
+        35.05371163960155,
+        -80.81949034537965,
+        35.05492575092031
+       ],
+       "cell": 27,
+       "cell_bbox": [
+        -80.8204128,
+        35.0543187,
+        -80.8202283,
+        35.0544705
+       ],
+       "score": 0.3001,
+       "rank": 3,
+       "raw_score": 0.2872,
+       "sense_id": "stormwater_pond",
+       "sense_label": "Stormwater pond",
+       "example": "2022_e4482_n33672#27",
+       "group_members": [
+        "2022_e4482_n33672",
+        "2022_e4479_n33677",
+        "2022_e4478_n33677",
+        "2022_e4470_n33680",
+        "2022_e4483_n33674",
+        "2022_e4481_n33672",
+        "2022_e4470_n33678",
+        "2022_e4470_n33681",
+        "2022_e4470_n33679",
+        "2022_e4484_n33673",
+        "2022_e4470_n33683",
+        "2022_e4477_n33678"
+       ]
+      }
+     }
+    ]
+   },
+   "metrics": {
+    "count": 6,
+    "pool": 212,
+    "sense_list": "swimming_pool",
+    "senses": [
+     "backyard_pool",
+     "community_pool",
+     "stormwater_pond",
+     "blue_tarp",
+     "lake_water",
+     "unknown"
+    ]
+   }
+  },
+  "confidence": null,
+  "method": "OpenCLIP sense prompts (conf/senses.json) \u2192 each chip assigned to its best sense \u2192 one tile per sense, DINOv2 4\u00d74-cell MMR diversity (cos<0.8); object cell localised by OpenCLIP on 16 per-cell context crops",
+  "assumptions": [
+   "The configured senses cover the plausible meanings of the query"
+  ],
+  "limits": [
+   "NAIP 2022 at 0.6 m/px: objects smaller than ~3 m are not resolvable",
+   "Scores are embedding similarities, not calibrated probabilities",
+   "Hits are 33.6 m sub-cells of 134 m chips, not object outlines (use `outline`)",
+   "Only the 'south_charlotte' area is indexed, not the whole county"
+  ],
+  "sources": [
+   {
+    "name": "USDA NAIP 2022",
+    "url": "https://planetarycomputer.microsoft.com/dataset/naip",
+    "date": "2022-06-02/2022-09-27",
+    "licence": "Public domain (USDA FSA NAIP); hosted by Microsoft Planetary Computer (PC Terms of Use)"
+   }
+  ],
+  "steps": [
+   {
+    "phase": "embed_query",
+    "detail": "raw query + 6 sense prompts (swimming_pool)",
+    "ms": 464.44
+   },
+   {
+    "phase": "candidate_pool",
+    "detail": "top 200 raw + top 40 per sense",
+    "ms": 5.3
+   },
+   {
+    "phase": "pick",
+    "detail": "one per sense, DINOv2 cell diversity cos<0.8",
+    "ms": 1.53
+   },
+   {
+    "phase": "localise",
+    "detail": "OpenCLIP on 16 context crops \u00d7 6 tiles (sense-specific)",
+    "ms": 38450.86
+   }
+  ],
+  "declined_reason": null,
+  "_fixture": {
+   "truncated_features": 3
+  }
+ }
+}

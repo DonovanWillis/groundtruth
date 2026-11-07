@@ -1,60 +1,77 @@
-# Groundtruth tool contract
+# Groundtruth API contract — v0.1
 
-Every Groundtruth tool — engine function, API route, or agent action — returns **one envelope**.
-Implementation: `engine/groundtruth/envelope.py` (pydantic, validated).
+Every tool, whether an engine function, an HTTP route or an agent action, returns **one envelope**. Implementation:
+`engine/groundtruth/envelope.py` (pydantic, validated). Example responses for every tool: `docs/fixtures/<tool>.json`.
+
+## Transport
+| | |
+|---|---|
+| base URL | `http://<host>:8000/api/v1` (host is announced separately; Tailscale only) |
+| tool call | `POST /api/v1/tools/{tool}` with a JSON body (below) → `200` + envelope |
+| health | `GET /api/v1/health` → `{ok, contract, engine_version, indexes: [{aoi, year, chips, index_version}]}` |
+| tool list | `GET /api/v1/tools` → `[{tool, implemented, version}]` |
+| chip image | `GET /api/v1/chips/{chip_id}.jpg?year=2022` → 224×224 JPEG (this is the `thumb_url` in features) |
+| layers | `GET /api/v1/layers` → `[name]` (inputs to `add_layer`) |
+| agent stream | `GET /api/v1/events` (SSE). **Reserved**; not implemented in v0.1 |
+
+Errors: a tool that will not answer still returns **HTTP 200** with `status: "declined"` and a `declined_reason`.
+HTTP 4xx is used only for malformed requests (wrong JSON shape), and 5xx only for server faults.
 
 ## Envelope
-
 ```jsonc
 {
-  "tool": "search_text",             // tool name
-  "version": "0.1.0",                // tool version (semver; bump on behaviour change)
-  "status": "ok",                    // ok | partial | declined
+  "tool": "search_text",                 // tool name
+  "version": "0.2.0",                    // engine tool version (semver)
+  "status": "ok",                        // ok | partial | declined
   "result": {
-    "geojson": { "type": "FeatureCollection", "features": [ ... ] },  // EPSG:4326 always
-    "metrics": { "count": 24, "area_acres_total": 3.1 }              // units in field names
+    "geojson": { "type": "FeatureCollection", "features": [] },  // always EPSG:4326
+    "metrics": { "count": 24 }                                     // units in key names
   },
-  "confidence": 0.62,                // 0..1 or null when not meaningful
-  "method": "OpenCLIP ViT-B/32 text→image cosine over NAIP 2022 chips (FAISS IP)",
-  "assumptions": ["NAIP 2022 is representative of today"],
-  "limits": ["0.6 m/px: objects < ~3 m are not resolvable"],
-  "sources": [{ "name": "USDA NAIP 2022", "url": "...", "date": "2022-06-02/2022-09-27", "licence": "Public domain" }],
-  "steps": [{ "phase": "embed_query", "detail": "1 text", "ms": 41.2 }],
-  "declined_reason": null            // required iff status == "declined"
+  "confidence": null,                    // 0..1, or null when not meaningful (similarity scores are not probabilities)
+  "method": "…",                         // one line: what was computed
+  "assumptions": ["…"],
+  "limits": ["…"],
+  "sources": [{ "name": "USDA NAIP 2022", "url": "…", "date": "2022-06-02/2022-09-27", "licence": "Public domain …" }],
+  "steps": [{ "phase": "embed_query", "detail": "…", "ms": 41.2 }],   // for the work-log panel
+  "declined_reason": null                // string iff status == "declined"
 }
 ```
+- `partial`: usable but incomplete. The usual cause is that only a slice is indexed, not the county; `limits` says why.
+- `declined`: no result. `declined_reason` is a short code or a sentence. **`"not_implemented"`** means the route exists but the tool
+  is not built yet.
+- Units are in field names: `area_m2`, `area_acres`, `perimeter_m`, `dist_m_to_<layer>`. Measurements are computed in EPSG:32617.
+- Deterministic: the same request on the same index version gives the same order. Ties are broken by `chip_id`.
 
-Rules
-- `status = partial` when the answer is usable but incomplete (e.g. only part of the AOI is indexed); say what is
-  missing in `limits`.
-- `status = declined` when the tool will not answer (out of area, asks for data about people, no index);
-  `declined_reason` is mandatory, `result` is empty.
-- Geometry in `result.geojson` is EPSG:4326. Measurements are computed in EPSG:32617 and carry units in the
-  key: `area_m2`, `area_acres`, `dist_m`, `length_m`.
-- Deterministic: same inputs + same index version ⇒ same output order (ties broken by `chip_id`).
-- Features carry `id` and at least `score` (when ranked) in `properties`.
+## Ids
+- **chip_id** `"{year}_e{col}_n{row}"`: a 224×224 px NAIP chip (134.4 m) on a fixed EPSG:32617 grid (stride 115.2 m).
+- **cell**: 0–63, row-major from the chip's north-west corner (8×8 grid of 16.8 m cells).
+- **example id**: `"chip_id"` or `"chip_id#cell"`, e.g. `"2022_e4472_n33675#30"`. Use the `example` property that
+  `pick_candidates` returns. Without `#cell`, the engine guesses the cell.
 
-## Chip feature (returned by search tools)
+## Result features (search tools)
+`Polygon` = the chip footprint. Properties:
+`chip_id, year, scene_id, thumb_url, chip_bbox [w,s,e,n], cell, cell_bbox [w,s,e,n], score, rank` plus tool-specific fields.
+`cell_bbox` is the matched 16.8 m sub-cell. Use it to draw the hit and to prompt `outline`.
 
-```jsonc
-{ "type": "Feature", "id": "2022_r0123_c0456",
-  "geometry": { "type": "Polygon", "coordinates": [...] },
-  "properties": { "chip_id": "2022_r0123_c0456", "score": 0.31, "rank": 1, "year": 2022,
-                  "scene_id": "nc_m_3508043_sw_17_060_20220927", "thumb_url": "/chips/2022_r0123_c0456.png" } }
-```
+## Tools
 
-## Planned tools
+Common optional body fields for the search tools: `year` (default = primary year, 2022) and `aoi` (default = `"county"` when
+built, otherwise the largest indexed slice).
 
-| tool | input | output (`result`) | status |
+| tool | status | request body | result |
 |---|---|---|---|
-| `search_text` | `query: str, k: int=50, year?, bbox?` | ranked chips for a text query (CLIP text→image) | slice |
-| `pick_candidates` | `query: str, n: int=6, pool: int=200` | `n` diverse representative chips covering different meanings (clustered from top `pool`) + `metrics.groups` | slice |
-| `find_similar` | `chip_ids: [str], exclude_ids: [str]=[], k: int=50` | chips similar to positives, pushed away from negatives (DINOv2) | slice |
-| `outline` | `chip_ids` or `bbox`, `concept` | polygons of the object(s) within chips (segmentation) with `area_m2`/`area_acres` | planned |
-| `refine` | `session_id, accept_ids, reject_ids` | re-ranked matches after live feedback (linear probe on embeddings) | planned |
-| `add_layer` | `name` (osm_roads, fema_flood, overture_buildings, …), `bbox?` | the layer as GeoJSON | planned |
-| `filter` | `features, where` (spatial/attribute predicates, e.g. `within flood zone AE`, `dist_m < 500 from I-485`) | filtered features + counts | planned |
-| `measure` | `features, what` (`area_acres`, `count`, `dist_m to layer`) | per-feature + total metrics | planned |
-| `export` | `features, format` (`geojson`, `csv`, `kml`) | file reference + `metrics.count` | planned |
+| `search_text` | ✅ | `{query: str, k?: int=50}` | ranked chips for a text query; `metrics.count, indexed_chips, score_max` |
+| `pick_candidates` | ✅ | `{query: str, n?: int=6}` | `n` tiles, one per meaning. Properties add `sense_id, sense_label, example, raw_score, group_members[]`; `metrics.senses` |
+| `find_similar` | ✅ | `{examples: [id], exclude?: [id], k?: int=50}` | chips whose best 16.8 m cell matches mean(examples) − 0.5·mean(exclude); overlapping duplicates removed |
+| `refine` | ✅ | `{session_id?: str, accept?: [id], reject?: [id], k?: int=50}` | re-ranked hits from a per-session logistic regression on cell vectors; `metrics.session_id, refine_ms`. Send the returned `session_id` back to accumulate feedback |
+| `measure` | ✅ | `{geojson: FeatureCollection, to_layer?: str}` | same features with `area_m2, area_acres, perimeter_m[, dist_m_to_<layer>]`; `metrics.area_acres_total` |
+| `add_layer` | ✅ | `{name: str, bbox?: [w,s,e,n]}` | the reference layer (see `/layers`) |
+| `filter` | ✅ | `{geojson, where: {intersects_layer?, layer_where?, not_intersects_layer?, dist_layer?, max_dist_m?, min_area_acres?, max_area_acres?, min_score?}}` | features passing all predicates; `metrics.count_in, count_out` |
+| `export` | ✅ | `{geojson, format: "geojson"\|"csv"}` | `metrics.file, bytes, content` (inline when < 2 MB) |
+| `outline` | 🚧 `declined: not_implemented` in v0.1 | `{examples: [id with #cell], max?: int=12}` | planned: SAM 2 polygons per hit (`area_m2, area_acres`), lazily computed and cached by `chip#cell` |
 
-All tools receive a `DataProvider` (dependency-injected); none fetch data themselves.
+## Changelog
+- **v0.1 (2026-11-07)**: first published contract.
+  - Envelope as above; routes `/api/v1/tools/{tool}`, `/health`, `/tools`, `/chips`, `/layers`; `/events` reserved.
+  - Ids `chip_id` and `chip_id#cell` on an 8×8 cell grid (index format v3, `chips224s192-g0.6-v3c8p192`).
+  - `outline` declined with `not_implemented`.
