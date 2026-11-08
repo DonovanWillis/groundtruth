@@ -40,3 +40,9 @@ AOIS: dict[str, tuple[float, float, float, float]] = {
 
 def precompute_dir(year: int, aoi: str) -> Path:
     return DATA / "precompute" / INDEX_VERSION / aoi / str(year)
+
+
+def offline() -> bool:
+    """GROUNDTRUTH_OFFLINE=1 blocks every outbound fetch to Planetary Computer (tiles + imagery): local caches only.
+    Used to prove the hero flow works with the network unplugged (without touching the system network)."""
+    return os.environ.get("GROUNDTRUTH_OFFLINE", "0") == "1"

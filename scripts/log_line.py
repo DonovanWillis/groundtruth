@@ -8,7 +8,6 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 p = Path(__file__).resolve().parents[1] / "docs" / "BUILD_LOG.md"
-ram = next((ln.split()[6] for ln in open("/proc/meminfo").read().splitlines()[:0]), None)
 avail = int(next(ln.split()[1] for ln in open("/proc/meminfo") if ln.startswith("MemAvailable"))) // 1024
 try:
     vram = subprocess.run(["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader"],

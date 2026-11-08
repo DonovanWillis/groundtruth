@@ -183,6 +183,8 @@ class PublicDataProvider(DataProvider):
         local = self.local_scene_path(sid, year)
         if local.exists():
             return str(local)
+        if config.offline():
+            raise FileNotFoundError(f"{sid} ({year}) is not in the local COG cache and GROUNDTRUTH_OFFLINE=1")
         if self.download_scenes:
             return str(self.ensure_local(sid, year))
         return planetary_computer.sign(self._href(sid, year))
@@ -215,29 +217,79 @@ class PublicDataProvider(DataProvider):
         y1 = np.ceil(bx[3] / g) * g
         return self.read_grid((x0, y0, x1, y1), year, gsd_m=g)
 
+    def render_tile(self, year: int, z: int, x: int, y: int, size: int = 256) -> bytes | None:
+        """Web-Mercator PNG tile from the LOCAL COG cache via rio-tiler (TiTiler's tiling engine), scenes composited in
+        priority order (first valid pixel wins). Returns None when any scene under the tile is not local (the caller
+        then falls back to Planetary Computer, unless offline) and b"" when no scene covers the tile."""
+        import morecantile
+        from rio_tiler.errors import TileOutsideBounds
+        from rio_tiler.io import Reader
+        from rio_tiler.mosaic import mosaic_reader
+        from rio_tiler.mosaic.methods import FirstMethod
+
+        tb = morecantile.tms.get("WebMercatorQuad").bounds(morecantile.Tile(x, y, z))
+        scenes = self.list_scenes((tb.left, tb.bottom, tb.right, tb.top), year)
+        if not scenes:
+            return b""
+        paths = [self.local_scene_path(s.scene_id, year) for s in scenes]
+        if not all(p.exists() for p in paths):
+            return None
+
+        def tiler(path, tx, ty, tz, **kw):
+            with Reader(str(path)) as src:
+                return src.tile(tx, ty, tz, indexes=(1, 2, 3), tilesize=size, nodata=0, **kw)
+
+        try:
+            img, _ = mosaic_reader(paths, tiler, x, y, z, pixel_selection=FirstMethod(), threads=0)
+        except Exception as e:  # an all-empty mosaic raises EmptyMosaicError
+            if isinstance(e, TileOutsideBounds) or type(e).__name__ == "EmptyMosaicError":
+                return b""
+            raise
+        return img.render(img_format="PNG")
+
     def get_tiles(self, year: int) -> TileSource:
         return TileSource(url_template=f"/api/tiles/naip/{year}/{{z}}/{{x}}/{{y}}.png",
                           attribution="USDA NAIP (public domain) via Microsoft Planetary Computer", year=year,
                           min_zoom=10, max_zoom=18)
 
     # ---------- vector layers ----------
+    OVERTURE = {"overture_buildings": "buildings", "overture_places": "places"}
+
     def layer_names(self) -> list[str]:
         d = self.data / "layers"
-        return sorted(p.stem for p in d.glob("*.geojson")) if d.exists() else []
+        names = sorted(p.stem for p in d.glob("*.geojson")) if d.exists() else []
+        return names + [k for k in self.OVERTURE if (d / f"{k}.parquet").exists()]
+
+    def _parsed(self, p: Path):
+        """Parsed GeoJSON + shapely geometries + STRtree, cached per file (reloaded if the file changes)."""
+        from shapely.strtree import STRtree
+
+        cache = self.__dict__.setdefault("_layer_cache", {})
+        key = (str(p), p.stat().st_mtime)
+        if key not in cache:
+            fc = json.loads(p.read_text())
+            feats = [f for f in fc["features"] if f.get("geometry")]
+            geoms = [shape(f["geometry"]) for f in feats]
+            cache[key] = (fc, feats, geoms, STRtree(geoms) if geoms else None)
+        return cache[key]
 
     def get_layer(self, name: str, bbox: BBox | None = None, *, detail: str = "web") -> dict[str, Any]:
         """``detail='web'`` (default) serves the simplified web build when one exists (scripts/build_web_layers.py);
-        ``detail='raw'`` always serves the full-resolution layer."""
+        ``detail='raw'`` always serves the full-resolution layer. Overture layers come from the DuckDB store."""
+        if name in self.OVERTURE and (self.data / "layers" / f"{name}.parquet").exists():
+            from groundtruth.vector import store
+
+            fc, _ms = store().query(self.OVERTURE[name], bbox)
+            return fc
         web = self.data / "layers" / "web" / f"{name}.geojson"
         p = web if detail == "web" and web.exists() else self.data / "layers" / f"{name}.geojson"
         if not p.exists():
             raise KeyError(f"unknown layer {name!r}; available: {self.layer_names()}")
-        fc = json.loads(p.read_text())
+        fc, feats, geoms, tree = self._parsed(p)
         if bbox is None:
             return fc
-        q = box(*bbox)
-        feats = [f for f in fc["features"] if f.get("geometry") and shape(f["geometry"]).intersects(q)]
-        return {"type": "FeatureCollection", "features": feats}
+        idx = sorted(int(i) for i in tree.query(box(*bbox), predicate="intersects")) if tree is not None else []
+        return {"type": "FeatureCollection", "features": [feats[i] for i in idx]}
 
     # ---------- provenance ----------
     def sources(self) -> list[Source]:

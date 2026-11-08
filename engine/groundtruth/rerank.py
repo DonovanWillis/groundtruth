@@ -134,6 +134,22 @@ def patch_tokens(index: ChipIndex, rows: Sequence[int], batch: int = 64) -> tupl
     return np.stack(out_t), np.stack(out_rgb), dino.device_name
 
 
+def dino_tokens(imgs: np.ndarray):
+    """(n, 224, 224, 3) uint8 → L2-normalised DINOv2 patch tokens (n, 256, 768) as a torch tensor on the DINOv2 device
+    (fp16 on CUDA via autocast, fp32 on CPU)."""
+    import torch
+
+    dino = get_dino()
+    x = (imgs.astype(np.float32) / 255.0 - IMAGENET_MEAN) / IMAGENET_STD
+    xt = torch.from_numpy(np.ascontiguousarray(x.transpose(0, 3, 1, 2))).to(dino.device)
+    with torch.inference_mode():
+        if dino.device_name == "cuda":
+            with torch.autocast("cuda", dtype=torch.float16):
+                h = dino.model(pixel_values=xt).last_hidden_state[:, 1:, :]
+            return torch.nn.functional.normalize(h.float(), dim=-1).half()
+        return torch.nn.functional.normalize(dino.model(pixel_values=xt).last_hidden_state[:, 1:, :].float(), dim=-1)
+
+
 class GpuPatchCache:
     """LRU of per-chip DINOv2 patch tokens kept ON THE DEVICE (fp16, 256×768 ≈ 0.39 MB per chip).
     Size: GROUNDTRUTH_PATCH_GPU_CACHE chips (default 3000 ≈ 1.2 GB VRAM, inside the 4 GB cap)."""
@@ -152,15 +168,7 @@ class GpuPatchCache:
         for k in range(0, len(missing), batch):
             rb = missing[k:k + batch]
             imgs = np.stack([np.asarray(Image.open(io.BytesIO(index.thumb_jpeg(r))).convert("RGB")) for r in rb])
-            x = (imgs.astype(np.float32) / 255.0 - IMAGENET_MEAN) / IMAGENET_STD
-            xt = torch.from_numpy(np.ascontiguousarray(x.transpose(0, 3, 1, 2))).to(dino.device)
-            with torch.inference_mode():
-                if dino.device_name == "cuda":
-                    with torch.autocast("cuda", dtype=torch.float16):
-                        h = dino.model(pixel_values=xt).last_hidden_state[:, 1:, :]
-                    h = torch.nn.functional.normalize(h.float(), dim=-1).half()
-                else:
-                    h = torch.nn.functional.normalize(dino.model(pixel_values=xt).last_hidden_state[:, 1:, :].float(), dim=-1)
+            h = dino_tokens(imgs)
             for t, r in enumerate(rb):
                 self.d[(root, r)] = h[t]
         out = []

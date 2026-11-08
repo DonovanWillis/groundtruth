@@ -1,0 +1,28 @@
+{
+  "_doc": "Open-vocabulary 'find anything' (Phase 4): concepts NOT in senses.json. CLIP ranks chips for the text (top_k_chips county-wide; every chip in a place up to place_max_chips, CLIP-ranked) → Grounding DINO boxes the concept in each chip → SAM 2.1 masks each box → verifier (area range per concept when known, else the detector score) → dedupe by distance. eye_precision = the measured pre-test (hits that are right out of 12), shown as 'low confidence' below low_confidence_below.",
+  "detector": "IDEA-Research/grounding-dino-tiny",
+  "detector_licence": "Apache-2.0 (see docs/LICENCE_GATE.md; training lineage note)",
+  "top_k_chips": 500,
+  "place_max_chips": 1500,
+  "batch": 8,
+  "box_threshold": 0.3,
+  "text_threshold": 0.25,
+  "max_box_frac": 0.5,
+  "min_box_px": 6,
+  "nms_m": 15,
+  "sam": true,
+  "low_confidence_below": 7,
+  "concepts": {
+    "tennis court": {"prompt": "tennis court", "area_m2": [150, 1500]},
+    "trampoline": {"prompt": "round trampoline", "area_m2": [5, 40]},
+    "boat dock": {"prompt": "boat dock", "area_m2": [10, 2000]},
+    "basketball court": {"prompt": "basketball court", "area_m2": [100, 1000]},
+    "golf green": {"prompt": "golf green", "area_m2": [200, 2500]},
+    "cemetery": {"prompt": "cemetery with gravestones", "area_m2": [500, 300000]},
+    "water tower": {"prompt": "water tower", "area_m2": [20, 600]},
+    "construction crane": {"prompt": "construction crane", "area_m2": [5, 3000]},
+    "school bus lot": {"prompt": "parked yellow school buses", "area_m2": [200, 30000]},
+    "baseball diamond": {"prompt": "baseball diamond", "area_m2": [400, 15000]}
+  },
+  "eye_precision": {}
+}

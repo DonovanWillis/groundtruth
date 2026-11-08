@@ -65,6 +65,35 @@ def _thumb(index, i: int) -> np.ndarray:
     return np.asarray(Image.open(io.BytesIO(index.thumb_jpeg(int(i)))).convert("RGB"))
 
 
+def query_vectors(eng, positives: Sequence[tuple[int, int]], negatives: Sequence[tuple[int, int]],
+                  concept: str | None, neg_weight: float = 0.5):
+    """Patch-level example vectors: per example cell, the patch with the most concept colour (else the cell mean).
+    → (P (k,768), N (m,768) or None, qp = normalised mean(P) − neg_weight·mean(N))."""
+    idx = eng.index
+    rule = concept_conf(concept)["rerank"].get("colour")
+    ex_rows = [i for i, _ in positives] + [i for i, _ in negatives]
+    T_ex, RGB_ex, _ = patch_tokens(idx, ex_rows)
+
+    def ex_vec(k: int, cell: int) -> np.ndarray:
+        ps = _cell_patches(cell, idx.grid)
+        if rule:
+            from groundtruth.rerank import colour_patches
+
+            cm = colour_patches(RGB_ex[k], rule).reshape(-1)[ps]
+            if cm.max() > 0.05:
+                return T_ex[k, ps[int(np.argmax(cm))]]
+        v = T_ex[k, ps].mean(0)
+        return v / max(np.linalg.norm(v), 1e-9)
+
+    P = np.stack([ex_vec(k, c) for k, (_, c) in enumerate(positives)])
+    N = np.stack([ex_vec(len(positives) + k, c) for k, (_, c) in enumerate(negatives)]) if negatives else None
+    qp = P.mean(0)
+    if N is not None:
+        qp = qp - neg_weight * N.mean(0)
+    qp /= max(np.linalg.norm(qp), 1e-9)
+    return P, N, qp
+
+
 def scan(eng, positives: Sequence[tuple[int, int]], negatives: Sequence[tuple[int, int]], rows: np.ndarray,
          concept: str | None, neg_weight: float = 0.5) -> tuple[list[Detection], dict[str, Any]]:
     cc = concept_conf(concept)
@@ -99,26 +128,7 @@ def scan(eng, positives: Sequence[tuple[int, int]], negatives: Sequence[tuple[in
         return [], info
     # 3. full-res patch tokens (examples + candidates), patch-level query
     t2 = time.perf_counter()
-    ex_rows = [i for i, _ in positives] + [i for i, _ in negatives]
-    T_ex, RGB_ex, _ = patch_tokens(idx, ex_rows)
-
-    def ex_vec(k: int, cell: int) -> np.ndarray:
-        ps = _cell_patches(cell, idx.grid)
-        if rule:
-            from groundtruth.rerank import colour_patches
-
-            cm = colour_patches(RGB_ex[k], rule).reshape(-1)[ps]
-            if cm.max() > 0.05:
-                return T_ex[k, ps[int(np.argmax(cm))]]
-        v = T_ex[k, ps].mean(0)
-        return v / max(np.linalg.norm(v), 1e-9)
-
-    P = np.stack([ex_vec(k, c) for k, (_, c) in enumerate(positives)])
-    N = np.stack([ex_vec(len(positives) + k, c) for k, (_, c) in enumerate(negatives)]) if negatives else None
-    qp = P.mean(0)
-    if N is not None:
-        qp = qp - neg_weight * N.mean(0)
-    qp /= max(np.linalg.norm(qp), 1e-9)
+    P, N, qp = query_vectors(eng, positives, negatives, concept, neg_weight)
     import torch
 
     from groundtruth.rerank import GPU_PATCHES, colour_map

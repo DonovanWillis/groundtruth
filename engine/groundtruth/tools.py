@@ -761,7 +761,8 @@ class Engine:
     @memo(_all_outlined)
     def find_all(self, examples: Sequence[str], exclude: Sequence[str] = (), k: int = 200,
                  bbox: Sequence[float] | None = None, place: str | None = None, concept: str | None = None,
-                 rerank: bool = True, outline_top: int = 300, within_layer: str | None = None) -> Envelope:
+                 rerank: bool = True, outline_top: int = 300, within_layer: str | None = None,
+                 dense: bool | None = None) -> Envelope:
         """The count. With a place/bbox: EXHAUSTIVE scan of every chip and cell in the box (scan.py): every object above
         the concept threshold, deduped across chip borders, negatives ("not this") applied; outlines for the top
         ``outline_top`` are queued (SAM 2, patch-prompted) and every cached outline passes an object check (area,
@@ -783,7 +784,7 @@ class Engine:
             return self._find_all_scan(examples, exclude, bbox, place, concept, outline_top, rows=rows,
                                        scope=f"chips covering layer '{within_layer}'")
         if bbox:
-            return self._find_all_scan(examples, exclude, bbox, place, concept, outline_top)
+            return self._find_all_scan(examples, exclude, bbox, place, concept, outline_top, dense=dense)
         self.__dict__["_busy"] = self.__dict__.get("_busy", 0) + 1
         try:
             base = self.find_similar(examples, exclude, k=k, bbox=bbox, rerank=rerank, concept=concept)
@@ -868,7 +869,7 @@ class Engine:
 
     def _find_all_scan(self, examples: Sequence[str], exclude: Sequence[str], bbox: Sequence[float] | None,
                        place: str | None, concept: str | None, outline_top: int, rows: np.ndarray | None = None,
-                       scope: str | None = None) -> Envelope:
+                       scope: str | None = None, dense: bool | None = None) -> Envelope:
         from groundtruth.scan import scan
 
         tool = "find_all"
@@ -914,31 +915,100 @@ class Engine:
                 base = float(np.clip(0.5 + (d.score - smin) / 0.3, 0, 1))
                 feat, chk = self._object_feature(d.row, d.cell, d.patch, d.score, r + 1, concept, base,
                                                  {"patch_sim": round(d.patch_sim, 4), "colour": round(d.colour, 3),
-                                                  "n_patches": d.n_patches})
+                                                  "n_patches": d.n_patches, "x_m": round(d.x_m, 2), "y_m": round(d.y_m, 2)})
                 if q is not None and chk is None and r < outline_top and (d.row, d.cell, d.patch) not in self._queued:
                     self._queued.add((d.row, d.cell, d.patch)); q.put((d.row, d.cell, d.patch)); n_queued += 1
                 if chk is not None and not chk["pass"]:
                     rejected += 1
                     continue
                 out.append(feat)
+        dense_info = None
+        if self._dense_wanted(dense, place, concept):
+            with t.step("dense", "dense proposals (colour blobs in centred windows, SAM 2 + verifier, cached) matched "
+                                 "to the examples, merged with the scan by distance") as st:
+                out, dense_info = self._merge_dense(out, pos, neg, place, concept, smin)
+                st.detail += (f": {dense_info['dense_matched']} dense matches, {dense_info['dense_added']} not found by "
+                              f"the standard scan → {len(out)} objects")
         for r, f in enumerate(out):
             f["properties"]["rank"] = r + 1
         metrics = self._object_metrics(out, rejected, n_queued, bbox, place, concept)
         metrics.update(mode="exhaustive_scan", **{k: v for k, v in info.items() if k != "device"}, device=info.get("device"))
+        metrics["dense"] = dense_info is not None
+        if dense_info:
+            metrics.update(dense_info)
         limits = self._limits() + [
             f"Exhaustive within {scope}: all {info['chips_in_box']} chips / {info['cells_scanned']} cells scored; objects "
             "below the concept threshold (conf/concepts.json) are not counted",
             "count = deduped objects (merged within the concept's nms_m) that did not fail the object check; "
             "objects not yet outlined are counted on their image evidence and may still be rejected once outlined",
             "Confidence is a heuristic (margin over the threshold × outline quality × object check), not a probability"]
+        method = ("Exhaustive scan: DINOv2 8×8 cells for every chip in the box → prefilter (cell similarity "
+                  "or concept colour) → full-res DINOv2 patches + concept colour → connected patch groups = "
+                  "objects → closer to positives than to the 'not this' negatives → dedupe by distance → "
+                  "SAM 2.1 outline (patch-prompted, lazy) → object check (area, compactness, colour)")
+        if dense_info:
+            method = ("DENSE mode: " + method + "; PLUS every concept-colour blob in the place re-tiled into a centred "
+                      "224 px window → DINOv2 patch token + SAM 2.1 outline + the same object check (precomputed, "
+                      f"{dense_info['dense_built']}) → matched to the examples with the same rule → merged by distance")
+            limits.append(f"Dense mode (precomputed for {place}): adds colour-blob proposals the chip grid missed; objects "
+                          "without the concept colour are only found by the standard scan")
         return self._env(tool, result=Result(geojson=feature_collection(out), metrics=metrics),
-                         confidence=self._mean_conf(out),
-                         method="Exhaustive scan: DINOv2 8×8 cells for every chip in the box → prefilter (cell similarity "
-                                "or concept colour) → full-res DINOv2 patches + concept colour → connected patch groups = "
-                                "objects → closer to positives than to the 'not this' negatives → dedupe by distance → "
-                                "SAM 2.1 outline (patch-prompted, lazy) → object check (area, compactness, colour)",
+                         confidence=self._mean_conf(out), method=method,
                          assumptions=["The picked examples show the intended object; the unpicked senses are negatives"],
                          limits=limits, steps=t.steps)
+
+    def _dense_wanted(self, dense: bool | None, place: str | None, concept: str | None) -> bool:
+        """dense=None → on when a dense build exists for this place/concept/year and conf says dense.auto (default on)."""
+        from groundtruth import dense as D
+        from groundtruth.rerank import concept_conf
+
+        if dense is False or not D.available(place, concept, self.year):
+            return False
+        return bool(dense) or bool(concept_conf(concept).get("dense", {}).get("auto", True))
+
+    def _merge_dense(self, out: list[dict[str, Any]], pos, neg, place: str, concept: str, smin: float):
+        from groundtruth import dense as D
+        from groundtruth.rerank import concept_conf
+        from groundtruth.scan import query_vectors
+
+        cache = self.__dict__.setdefault("_dense_sets", {})
+        key = (place, concept, self.year)
+        if key not in cache:
+            cache[key] = D.DenseSet(place, concept, self.year)
+        ds: D.DenseSet = cache[key]
+        det = concept_conf(concept)["detect"]
+        P, N, qp = query_vectors(self, pos, neg, concept)
+        match = ds.match(P, N, qp, det)
+        S = ds.sims(qp)
+        ids = ds.index_ids(self.index)
+        r2 = float(det["nms_m"]) ** 2
+        std_pts = np.array([[f["properties"].get("x_m", np.nan), f["properties"].get("y_m", np.nan)] for f in out]) \
+            if out else np.zeros((0, 2))
+        if out and np.isnan(std_pts).any():  # standard features carry no x/y: use the geometry centroid
+            std_pts = np.array([to_measure(shape(f["geometry"])).centroid.coords[0] for f in out])
+        merged, added, replaced = list(out), 0, 0
+        for k in match:
+            f = json.loads(json.dumps(ds.feats[k]))
+            if f.get("geometry") is None or ids[k] is None:
+                continue
+            p = f["properties"]
+            conf = float(np.clip(0.5 + (float(S[k]) - smin) / 0.3, 0, 1)) * (0.5 + 0.5 * float(p.get("sam_score", 0)))
+            p.update(example=ids[k], dense_id=f["id"], score=round(float(S[k]), 4), patch_sim=round(float(S[k]), 4),
+                     colour=round(float(ds.colour[k]), 3), confidence=round(conf, 3), geometry_kind="outline")
+            near = (((std_pts - (p["x_m"], p["y_m"])) ** 2).sum(1) < r2) if len(std_pts) else np.zeros(0, bool)
+            if near.any():
+                j = int(np.argmax(near))
+                if merged[j]["properties"].get("geometry_kind") != "outline":  # dense outline replaces a pending box
+                    merged[j] = {**f, "id": merged[j].get("id", f["id"])}
+                    replaced += 1
+                continue
+            merged.append(f)
+            std_pts = np.vstack([std_pts, (p["x_m"], p["y_m"])]) if len(std_pts) else np.array([[p["x_m"], p["y_m"]]])
+            added += 1
+        merged.sort(key=lambda f: -float(f["properties"].get("confidence") or 0))
+        return merged, {"dense_matched": len(match), "dense_added": added, "dense_replaced_boxes": replaced,
+                        "dense_proposals": ds.meta["proposals"], "dense_passed_verifier": ds.meta["passed_verifier"],
+                        "dense_built": ds.meta["built"]}
 
     # ------------------------------------------------------------------ compare_years (search across time)
     @memo()

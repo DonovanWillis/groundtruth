@@ -115,6 +115,7 @@ class FindAllIn(Common):
     rerank: bool = True
     outline_top: int = Field(300, ge=0, le=500)
     within_layer: str | None = None
+    dense: bool | None = None
 
 
 class RefineIn(Common):
@@ -312,7 +313,7 @@ def t_find_similar(b: FindSimilarIn) -> JSONResponse:
 def t_find_all(b: FindAllIn) -> JSONResponse:
     return _env(eng(b.aoi, b.year).find_all(b.examples, b.exclude, k=b.k, bbox=b.bbox, place=b.place,
                                             concept=b.concept, rerank=b.rerank, outline_top=b.outline_top,
-                                            within_layer=b.within_layer))
+                                            within_layer=b.within_layer, dense=b.dense))
 
 
 @app.post("/api/v1/tools/compare_years")
@@ -379,11 +380,23 @@ _TILE_SEARCH: dict[int, str] = {}
 def naip_tile(year: int, z: int, x: int, y: int) -> Response:
     import httpx
 
-    cache = config.DATA / "cache" / "tiles" / "naip" / str(year) / str(z) / str(x) / f"{y}.png"
-    if cache.exists():
-        return FileResponse(cache, media_type="image/png", headers={"Cache-Control": "max-age=86400"})
+    hdr = {"Cache-Control": "max-age=86400"}
     if z < 10 or z > 18 or year not in _provider.imagery_years():
         return Response(status_code=204)
+    # 1) local COGs (rio-tiler, TiTiler's engine) when every scene under the tile is cached locally
+    if os.environ.get("GROUNDTRUTH_LOCAL_TILES", "1") == "1":
+        png = _provider.render_tile(year, z, x, y)
+        if png == b"":
+            return Response(status_code=204)
+        if png is not None:
+            return Response(png, media_type="image/png", headers={**hdr, "X-Tile-Source": "local-cog"})
+    # 2) disk tile cache from earlier Planetary Computer fetches
+    cache = config.DATA / "cache" / "tiles" / "naip" / str(year) / str(z) / str(x) / f"{y}.png"
+    if cache.exists():
+        return FileResponse(cache, media_type="image/png", headers={**hdr, "X-Tile-Source": "tile-cache"})
+    # 3) Planetary Computer (fallback only; blocked when GROUNDTRUTH_OFFLINE=1)
+    if config.offline():
+        return Response(status_code=204, headers={"X-Tile-Source": "offline-miss"})
     base = "https://planetarycomputer.microsoft.com/api/data/v1"
     for attempt in range(2):
         if year not in _TILE_SEARCH or attempt:
@@ -397,10 +410,38 @@ def naip_tile(year: int, z: int, x: int, y: int) -> Response:
         if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
             cache.parent.mkdir(parents=True, exist_ok=True)
             tmp = cache.with_suffix(".tmp"); tmp.write_bytes(r.content); os.replace(tmp, cache)
-            return Response(r.content, media_type="image/png", headers={"Cache-Control": "max-age=86400"})
+            return Response(r.content, media_type="image/png", headers={**hdr, "X-Tile-Source": "planetary-computer"})
         if r.status_code == 404 and "Unknown search" not in r.text:
             return Response(status_code=204)
     return Response(status_code=502)
+
+
+# ---------------- vector tiles (PMTiles built by scripts/build_pmtiles.py; MapLibre source-layer = layer name) -----
+_PMT: dict[str, Any] = {}
+
+
+@app.get("/api/v1/vt/{layer}/{z}/{x}/{y}.pbf")
+def vector_tile(layer: str, z: int, x: int, y: int) -> Response:
+    from pmtiles.reader import MmapSource, Reader
+
+    p = config.DATA / "tiles" / f"{layer}.pmtiles"
+    if not p.exists() or "/" in layer or ".." in layer:
+        raise HTTPException(404, f"no vector tiles for {layer!r}")
+    if layer not in _PMT:
+        f = open(p, "rb")
+        _PMT[layer] = Reader(MmapSource(f))
+    data = _PMT[layer].get(z, x, y)
+    if not data:
+        return Response(status_code=204)
+    return Response(data, media_type="application/x-protobuf",
+                    headers={"Content-Encoding": "gzip", "Cache-Control": "max-age=86400"})
+
+
+@app.get("/api/v1/vt")
+def vector_tile_layers() -> dict[str, Any]:
+    conf = json.loads((config.SENSES_PATH.parent / "vector_tiles.json").read_text())["layers"]
+    return {k: {"minzoom": v["minzoom"], "maxzoom": v["maxzoom"], "url": f"/api/v1/vt/{k}/{{z}}/{{x}}/{{y}}.pbf"}
+            for k, v in conf.items() if (config.DATA / "tiles" / f"{k}.pmtiles").exists()}
 
 
 @app.get("/api/v1/boundary")

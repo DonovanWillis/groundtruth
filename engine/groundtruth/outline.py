@@ -62,6 +62,28 @@ class Outliner:
                 return f
             return self._outline_uncached(index, i, cell, margin_px, cp, patch)
 
+    def segment(self, img, box: list[float], point: list[float]) -> tuple[np.ndarray, float]:
+        """SAM 2.1 on one RGB image (PIL or uint8 array), prompted by a box + positive point (pixels).
+        Multimask; picks the highest-IoU mask no larger than 1.5× the box. → (bool mask HxW, sam_score)."""
+        import torch
+        from PIL import Image
+
+        if not isinstance(img, Image.Image):
+            img = Image.fromarray(np.asarray(img))
+        w, h = img.size
+        proc, model = self._model
+        inputs = proc(images=img, input_boxes=[[box]], input_points=[[[point]]], input_labels=[[[1]]],
+                      return_tensors="pt").to(self.device)
+        with torch.inference_mode():
+            out = model(**inputs, multimask_output=True)
+        masks = proc.post_process_masks(out.pred_masks.cpu(), inputs["original_sizes"].cpu())[0]
+        cand = np.asarray(masks).reshape(-1, h, w).astype(bool)
+        ious = out.iou_scores.reshape(-1).float().cpu().numpy()[: len(cand)]
+        box_area = (box[2] - box[0]) * (box[3] - box[1])
+        ok = [k for k in range(len(cand)) if 0 < cand[k].sum() <= 1.5 * box_area] or list(range(len(cand)))
+        k = max(ok, key=lambda j: ious[j])
+        return cand[k], float(ious[k])
+
     def _outline_uncached(self, index: ChipIndex, i: int, cell: int, margin_px: int, cp,
                           patch: int | None = None) -> dict[str, Any]:
         chip_id = index.ids[i]
@@ -84,18 +106,7 @@ class Outliner:
             box = [max(0, pc * pp - m), max(0, pr * pp - m), min(config.CHIP_PX, (pc + 1) * pp + m),
                    min(config.CHIP_PX, (pr + 1) * pp + m)]
             point = [pc * pp + pp / 2, pr * pp + pp / 2]
-        proc, model = self._model
-        inputs = proc(images=img, input_boxes=[[box]], input_points=[[[point]]], input_labels=[[[1]]],
-                      return_tensors="pt").to(self.device)
-        with torch.inference_mode():
-            out = model(**inputs, multimask_output=True)
-        masks = proc.post_process_masks(out.pred_masks.cpu(), inputs["original_sizes"].cpu())[0]
-        cand = np.asarray(masks).reshape(-1, config.CHIP_PX, config.CHIP_PX).astype(bool)
-        ious = out.iou_scores.reshape(-1).float().cpu().numpy()[: len(cand)]
-        box_area = (box[2] - box[0]) * (box[3] - box[1])
-        ok = [k for k in range(len(cand)) if 0 < cand[k].sum() <= 1.5 * box_area] or list(range(len(cand)))
-        k = max(ok, key=lambda j: ious[j])
-        mask, score = cand[k], float(ious[k])
+        mask, score = self.segment(img, box, point)
         # polygonise in UTM: chip pixel (0,0) = NW corner
         x0, y0 = float(index.meta["x0_m"][i]), float(index.meta["y0_m"][i])
         tr = from_origin(x0, y0 + config.CHIP_M, config.GSD_M, config.GSD_M)
