@@ -30,7 +30,8 @@ _provider = PublicDataProvider(download_scenes=False)
 _lock = threading.Lock()
 
 TOOLS = {"search_text": True, "pick_candidates": True, "find_similar": True, "find_all": True, "refine": True,
-         "measure": True, "add_layer": True, "filter": True, "export": True, "outline": True, "compare_years": True}
+         "measure": True, "add_layer": True, "filter": True, "export": True, "outline": True, "compare_years": True,
+         "find_place": True, "isochrone": True, "find_buildings": True, "find_anything": True}
 
 
 _BBOX_CACHE: dict[str, tuple[float, list[float]]] = {}
@@ -218,10 +219,16 @@ def _warmup() -> None:
             if e.aoi == "county" and os.environ.get("GROUNDTRUTH_WARMUP_PLACES", "1") == "1":
                 from groundtruth.planner import run as plan_run
 
+                def idle() -> None:  # background warm-up yields to real requests (GPU + CPU are shared)
+                    while _t.time() - LAST_REQ["t"] < 3.0 or LAST_REQ["active"] > 0:
+                        _t.sleep(0.5)
+
                 for pl in json.loads((config.SENSES_PATH.parent / "places.json").read_text())["places"]:
+                    idle()
                     e.find_all([ex], neg, place=pl, concept="swimming_pool")
                 for chip in ("find swimming pools", "pools within 1 km of I-485 in Ballantyne",
                              "pools in flood zones in Matthews", "new pools since 2020 in Ballantyne"):
+                    idle()
                     plan_run(lambda year: eng(None, year), chip)
                 WARM["places_ms"] = round((_t.perf_counter() - t0) * 1000)
         except Exception as err:  # never block health forever; report it
@@ -233,13 +240,26 @@ def _warmup() -> None:
     threading.Thread(target=run, daemon=True, name="warmup").start()
 
 
+LAST_REQ: dict[str, Any] = {"t": 0.0, "active": 0}
+
+
 @app.middleware("http")
 async def replay_middleware(request, call_next):
+    import time as _t
+
     if _REPLAY and request.method == "POST" and request.url.path.startswith("/api/v1/tools/"):
         r = _replay(request.url.path.rsplit("/", 1)[-1])
         if r is not None:
             return JSONResponse(r, headers={"X-Groundtruth-Replay": "1"})
-    return await call_next(request)
+    busy = request.method == "POST"
+    if busy:
+        LAST_REQ["active"] += 1
+    try:
+        return await call_next(request)
+    finally:
+        if busy:
+            LAST_REQ["active"] -= 1
+            LAST_REQ["t"] = _t.time()
 
 
 def _env(e: Envelope) -> JSONResponse:
@@ -340,6 +360,54 @@ def t_measure(b: MeasureIn) -> JSONResponse:
 @app.post("/api/v1/tools/filter")
 def t_filter(b: FilterIn) -> JSONResponse:
     return _env(eng(b.aoi, b.year).filter(b.geojson, b.where))
+
+
+class FindPlaceIn(Common):
+    query: str
+    bbox: list[float] | None = None
+    place: str | None = None
+    limit: int = Field(5000, ge=1, le=20000)
+
+
+class IsochroneIn(Common):
+    origin: Any
+    minutes: float = Field(10, gt=0, le=60)
+    mode: str = "drive"
+
+
+class FindBuildingsIn(Common):
+    kind: str = "building"
+    bbox: list[float] | None = None
+    place: str | None = None
+    limit: int = Field(20000, ge=1, le=100000)
+    min_height_m: float | None = None
+
+
+class FindAnythingIn(Common):
+    text: str
+    bbox: list[float] | None = None
+    place: str | None = None
+
+
+@app.post("/api/v1/tools/find_place")
+def t_find_place(b: FindPlaceIn) -> JSONResponse:
+    return _env(eng(b.aoi, b.year).find_place(b.query, bbox=b.bbox, place=b.place, limit=b.limit))
+
+
+@app.post("/api/v1/tools/isochrone")
+def t_isochrone(b: IsochroneIn) -> JSONResponse:
+    return _env(eng(b.aoi, b.year).isochrone(b.origin, b.minutes, b.mode))
+
+
+@app.post("/api/v1/tools/find_buildings")
+def t_find_buildings(b: FindBuildingsIn) -> JSONResponse:
+    return _env(eng(b.aoi, b.year).find_buildings(b.kind, bbox=b.bbox, place=b.place, limit=b.limit,
+                                                  min_height_m=b.min_height_m))
+
+
+@app.post("/api/v1/tools/find_anything")
+def t_find_anything(b: FindAnythingIn) -> JSONResponse:
+    return _env(eng(b.aoi, b.year).find_anything(b.text, bbox=b.bbox, place=b.place))
 
 
 @app.post("/api/v1/tools/export")

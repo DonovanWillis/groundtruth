@@ -130,6 +130,29 @@ def find_anything(eng, text: str, bbox: Sequence[float] | None, place: str | Non
         pts.append((cx, cy))
         kept.append((i, b, s_, cx, cy))
     info["boxes_after_dedupe"] = len(kept)
+    # 3b. CLIP crop verifier (A/B flag clip_verify.enabled): the box crop (+context) must match the prompt better than
+    # every background prompt by min_margin
+    cv = c.get("clip_verify", {})
+    if cv.get("enabled") and kept:
+        t3 = time.perf_counter()
+        clip = eng._clip_model()
+        crops = []
+        for i, b, *_ in kept:
+            im = Image.open(io.BytesIO(eng.index.thumb_jpeg(i))).convert("RGB")
+            w, h = b[2] - b[0], b[3] - b[1]
+            pad = float(cv.get("context", 0.3))
+            x0_, y0_ = max(0, b[0] - pad * w), max(0, b[1] - pad * h)
+            x1_, y1_ = min(config.CHIP_PX, b[2] + pad * w), min(config.CHIP_PX, b[3] + pad * h)
+            crops.append(np.asarray(im.crop((int(x0_), int(y0_), int(np.ceil(x1_)), int(np.ceil(y1_))))
+                                    .resize((224, 224), Image.BICUBIC)))
+        E = clip.embed_images(np.stack(crops))
+        txt = clip.embed_texts([f"aerial photo of a {ce['prompt']}"] + [f"aerial photo of {n}" for n in cv["negatives"]])
+        S = E @ txt.T
+        margin = S[:, 0] - S[:, 1:].max(1)
+        keep_mask = margin >= float(cv.get("min_margin", 0.0))
+        info["clip_rejected"] = int((~keep_mask).sum())
+        kept = [k for k, ok in zip(kept, keep_mask) if ok]
+        info["ms_clip_verify"] = round((time.perf_counter() - t3) * 1000)
     # 4. SAM 2.1 per box + verifier
     t2 = time.perf_counter()
     outl = None
@@ -148,6 +171,11 @@ def find_anything(eng, text: str, bbox: Sequence[float] | None, place: str | Non
         if outl is not None:
             img = Image.open(io.BytesIO(eng.index.thumb_jpeg(i))).convert("RGB")
             mask, sam_score = outl.segment(img, b, [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2])
+            if c.get("clip_mask_to_box", False):  # A/B flag: SAM may bleed into neighbours; keep it inside the box
+                mpad = int(c.get("mask_box_pad_px", 4))
+                bm = np.zeros_like(mask)
+                bm[max(0, int(b[1]) - mpad):int(np.ceil(b[3])) + mpad, max(0, int(b[0]) - mpad):int(np.ceil(b[2])) + mpad] = True
+                mask = mask & bm
             polys = [shape(gm) for gm, v in rfeatures.shapes(mask.astype(np.uint8), mask=mask, transform=tr) if v == 1]
             if polys:
                 bb_m = box(x0 + b[0] * g, y0 + config.CHIP_M - b[3] * g, x0 + b[2] * g, y0 + config.CHIP_M - b[1] * g)

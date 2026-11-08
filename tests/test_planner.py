@@ -14,6 +14,27 @@ def test_required_requests_parse():
     assert (p.concept, p.place, p.layer, p.inside_layer) == ("swimming_pool", "Matthews", "fema_flood_zones", True)
 
 
+def test_phase5_phrases_parse():
+    p = parse("houses within 10 minutes of Ardrey Kell High School")
+    assert (p.target_kind, p.target, p.minutes, p.mode, p.origin) == ("buildings", "house", 10.0, "drive",
+                                                                       "ardrey kell high school")
+    p = parse("pools within a 5 minute walk of a park")
+    assert (p.target_kind, p.concept, p.minutes, p.mode, p.origin) == ("concept", "swimming_pool", 5.0, "walk", "park")
+    p = parse("restaurants near the light rail")
+    assert (p.target_kind, p.target, p.layer, p.within_m) == ("place_category", "restaurant", "osm_light_rail", 500.0)
+    p = parse("parking lots within 10 minutes of the airport")
+    assert (p.target_kind, p.concept, p.minutes, p.origin) == ("concept", "parking_lot", 10.0, "the airport")
+
+
+def test_height_and_open_vocabulary_parse():
+    p = parse("buildings taller than 30 m in Uptown")
+    assert (p.target_kind, p.target, p.min_height_m, p.place) == ("buildings", "building", 30.0, "Uptown")
+    p = parse("tennis courts in Ballantyne")
+    assert (p.target_kind, p.target, p.place) == ("open", "tennis courts", "Ballantyne")
+    p = parse("schools in Matthews")
+    assert (p.target_kind, p.target, p.place) == ("place_category", "school", "Matthews")
+
+
 def test_people_requests_declined():
     from groundtruth.tools import _people
 

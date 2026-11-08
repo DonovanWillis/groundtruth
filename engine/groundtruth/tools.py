@@ -16,6 +16,7 @@ import os
 import time
 import uuid
 from collections import OrderedDict
+from contextlib import nullcontext as _null_ctx
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -1409,6 +1410,15 @@ class Engine:
                 if bb is None:
                     return declined(tool, VERSION, f"unknown place {where['inside_place']!r}")
                 place_g = to_measure(box(*bb))
+            iso_g, iso_info = None, None
+            if where.get("within_minutes_of") and feats:
+                try:
+                    iso_g, iso_info = self._travel_area(where["within_minutes_of"], feats)
+                    from shapely.prepared import prep
+
+                    iso_p = prep(iso_g)
+                except (KeyError, ValueError, FileNotFoundError) as e:
+                    return declined(tool, VERSION, str(e))
         keep = []
         with t.step("filter", f"{len(feats)} features"):
             for f in feats:
@@ -1423,6 +1433,8 @@ class Engine:
                     continue
                 if place_g is not None and not gm.intersects(place_g):
                     continue
+                if iso_g is not None and not iso_p.intersects(gm):
+                    continue
                 if "min_area_acres" in where and a < where["min_area_acres"]:
                     continue
                 if "max_area_acres" in where and a > where["max_area_acres"]:
@@ -1432,11 +1444,261 @@ class Engine:
                 if "min_confidence" in where and float(p.get("confidence", 0)) < where["min_confidence"]:
                     continue
                 keep.append(f)
-        return self._env(tool, status="ok", result=Result(geojson=feature_collection(keep), metrics={
-            "count_in": len(feats), "count_out": len(keep)}), confidence=1.0,
-            method="Spatial/attribute predicates evaluated in EPSG:32617 (distances to layer unions)",
-            limits=["Distances are to the simplified web build of a layer when one exists (~3 m)"], sources=[],
-            steps=t.steps)
+        limits = ["Distances are to the simplified web build of a layer when one exists (~3 m)"]
+        sources = []
+        metrics: dict[str, Any] = {"count_in": len(feats), "count_out": len(keep)}
+        if iso_info:
+            metrics["travel"] = iso_info
+            limits.append("Travel times: Valhalla on OpenStreetMap roads at free-flow speeds (no live traffic); "
+                          "an object counts when its outline touches the travel-time area")
+            sources.append(self.provider.routing_source())
+        return self._env(tool, status="ok", result=Result(geojson=feature_collection(keep), metrics=metrics),
+                         confidence=1.0,
+                         method="Spatial/attribute predicates evaluated in EPSG:32617 (distances to layer unions"
+                                + ("; travel-time areas = union of Valhalla isochrones from the origins" if iso_info else "")
+                                + ")",
+                         limits=limits, sources=sources, steps=t.steps)
+
+    # ------------------------------------------------------------------ places + travel time (Phase 5)
+    @staticmethod
+    def _pc() -> dict[str, Any]:
+        return json.loads((config.SENSES_PATH.parent / "places_categories.json").read_text())
+
+    def resolve_category(self, text: str) -> tuple[str, dict[str, Any]] | None:
+        t = text.lower().strip()
+        for k, v in self._pc()["categories"].items():
+            if t == k or t in v["words"]:
+                return k, v
+        return None
+
+    def resolve_origin(self, spec: Any) -> tuple[list[tuple[float, float, str]], str]:
+        """→ ([(lon, lat, label)], how). spec: {lon, lat} | {name: "..."} | {category: "park"} | a string (landmark,
+        category word or place name)."""
+        from groundtruth.vector import store
+
+        if isinstance(spec, str):
+            s = spec.lower().strip()
+            lm = self._pc()["landmarks"].get(s)
+            if lm:
+                spec = {"name": lm["name"]}
+            elif self.resolve_category(s):
+                spec = {"category": self.resolve_category(s)[0]}
+            else:
+                spec = {"name": spec}
+        if "lon" in spec and "lat" in spec:
+            return [(float(spec["lon"]), float(spec["lat"]), spec.get("label", "point"))], "point"
+        if spec.get("name"):
+            fc, _ = store().places(name=spec["name"], limit=50)
+            if not fc["features"]:
+                raise KeyError(f"no place named like {spec['name']!r} in Overture places")
+            nm = spec["name"].lower()
+            best = sorted(fc["features"], key=lambda f: (-(1 if (f["properties"].get("name") or "").lower() == nm else 0),
+                                                          -float(f["properties"].get("confidence") or 0),
+                                                          len(f["properties"].get("name") or ""), f["id"]))[0]
+            c = shape(best["geometry"]).centroid
+            return [(c.x, c.y, best["properties"].get("name") or spec["name"])], "name"
+        if spec.get("category"):
+            rc = self.resolve_category(spec["category"])
+            if rc is None:
+                raise KeyError(f"unknown place category {spec['category']!r} (conf/places_categories.json)")
+            return [], rc[0]
+        raise ValueError(f"cannot resolve origin {spec!r}")
+
+    def _travel_area(self, spec: dict[str, Any], feats: Sequence[dict[str, Any]] = ()):
+        """Union of isochrones (EPSG:32617) for within_minutes_of {origin, minutes, mode}. A category origin uses every
+        place of that category that could reach the features (nearest 30)."""
+        from shapely.ops import unary_union
+
+        from groundtruth.vector import store
+
+        pc = self._pc()
+        mode = pc["modes"].get(str(spec.get("mode", "drive")).lower(), "auto")
+        minutes = float(spec.get("minutes", 10))
+        pts, how = self.resolve_origin(spec.get("origin", spec))
+        if how not in ("point", "name"):
+            cat = pc["categories"][how]
+            speed = {"auto": 25.0, "bicycle": 6.0, "pedestrian": 1.5}[mode]  # m/s upper bound for reach
+            reach = speed * minutes * 60
+            if feats:
+                fb = to_measure(unary_union([shape(f["geometry"]) for f in feats])).bounds
+                bb = to_wgs84(box(fb[0] - reach, fb[1] - reach, fb[2] + reach, fb[3] + reach)).bounds
+            else:
+                bb = None
+            fc, _ = store().places(bb, cat.get("category", []), taxonomy=cat.get("taxonomy", []))
+            cand = [(shape(f["geometry"]).centroid, f["properties"].get("name") or how) for f in fc["features"]]
+            if feats:
+                fu = to_measure(unary_union([shape(f["geometry"]) for f in feats]))
+                cand.sort(key=lambda c: fu.distance(to_measure(c[0])))
+            pts = [(c.x, c.y, nm) for c, nm in cand[:30]]
+            if not pts:
+                raise KeyError(f"no '{how}' places within reach")
+        polys = [to_measure(shape(self.provider.isochrone(lo, la, minutes, mode)["geometry"])) for lo, la, _ in pts]
+        area = unary_union(polys).buffer(0)
+        return area, {"origins": [{"lon": round(lo, 6), "lat": round(la, 6), "name": nm} for lo, la, nm in pts[:30]],
+                      "minutes": minutes, "mode": mode, "area_km2": round(area.area / 1e6, 3)}
+
+    def find_place(self, query: str, bbox: Sequence[float] | None = None, place: str | None = None,
+                   limit: int = 5000) -> Envelope:
+        """Overture places by category word (conf/places_categories.json) or by name; within a place/bbox if given."""
+        tool = "find_place"
+        if _people(query):
+            return declined(tool, VERSION, "Groundtruth does not search for information about people")
+        from groundtruth.vector import store
+
+        if place and not bbox:
+            bbox = self.place_bbox(place)
+        t = StepTimer()
+        rc = self.resolve_category(query)
+        with t.step("query", f"DuckDB spatial: {'category ' + rc[0] if rc else 'name ~ ' + repr(query)}"):
+            if rc:
+                fc, ms = store().places(bbox, rc[1].get("category", []), taxonomy=rc[1].get("taxonomy", []), limit=limit)
+            else:
+                fc, ms = store().places(bbox, name=query, limit=limit)
+        feats = []
+        for r, f in enumerate(fc["features"]):
+            p = f["properties"]
+            feats.append({"type": "Feature", "id": f["id"], "geometry": f["geometry"],
+                          "properties": {"id": p.get("id"), "name": p.get("name"), "category": p.get("category"),
+                                         "confidence": round(float(p.get("confidence") or 0), 3), "rank": r + 1,
+                                         "source_dataset": p.get("source_dataset")}})
+        return self._env(tool, status="ok", result=Result(geojson=feature_collection(feats), metrics={
+            "count": len(feats), "match": "category" if rc else "name", "category": rc[0] if rc else None,
+            "bbox": list(bbox) if bbox else None, "place": place, "truncated": len(feats) >= limit}),
+            confidence=self._mean_conf(feats) or 0.0,
+            method="Overture places (local parquet) queried with DuckDB spatial by category or name; "
+                   "confidence = Overture's own place confidence",
+            limits=["Overture places are crowd/partner-sourced: some are missing, closed or misplaced",
+                    "Category words map to Overture categories via conf/places_categories.json"],
+            sources=[self.provider.overture_source("places")], steps=t.steps)
+
+    def isochrone(self, origin: Any, minutes: float = 10, mode: str = "drive") -> Envelope:
+        """Travel-time area from an origin ({lon, lat}, a place name or a landmark) by drive | walk | bike."""
+        tool = "isochrone"
+        t = StepTimer()
+        with t.step("route", f"Valhalla isochrone {minutes} min {mode}"):
+            try:
+                area, info = self._travel_area({"origin": origin, "minutes": minutes, "mode": mode})
+            except (KeyError, ValueError, FileNotFoundError) as e:
+                return declined(tool, VERSION, str(e))
+        f = {"type": "Feature", "id": "isochrone", "geometry": mapping(to_wgs84(area)),
+             "properties": {"minutes": info["minutes"], "mode": info["mode"], "area_km2": info["area_km2"],
+                            "origin": info["origins"][0] if info["origins"] else None}}
+        return self._env(tool, status="ok", result=Result(geojson=feature_collection([f]), metrics=info),
+                         confidence=0.8,
+                         method="Valhalla isochrone on the local OpenStreetMap road graph (Mecklenburg + 5 km)",
+                         limits=["Free-flow speeds, no live traffic or time of day; confidence is a fixed heuristic"],
+                         sources=[self.provider.routing_source()], steps=t.steps)
+
+    def find_anything(self, text: str, bbox: Sequence[float] | None = None, place: str | None = None) -> Envelope:
+        """Open vocabulary (concepts not in senses.json): CLIP chips → Grounding DINO boxes → SAM 2.1 → verifier."""
+        tool = "find_anything"
+        if _people(text):
+            return declined(tool, VERSION, "Groundtruth does not search for information about people")
+        from groundtruth import openvocab as OV
+
+        if place and not bbox:
+            bbox = self.place_bbox(place)
+            if bbox is None:
+                return declined(tool, VERSION, f"unknown place {place!r}")
+        t = StepTimer()
+        self.__dict__["_busy"] = self.__dict__.get("_busy", 0) + 1
+        try:
+            with t.step("detect", f"open vocabulary '{text}'") as st:
+                feats, info = OV.find_anything(self, text, bbox, place)
+                st.detail += (f": {info['chips_searched']} chips → {info['raw_boxes']} boxes → "
+                              f"{info['boxes_after_dedupe']} after dedupe → {len(feats)} kept ({info['device']})")
+        finally:
+            self._busy -= 1
+        c = OV.conf()
+        metrics = {**self._object_metrics(feats, info["rejected_by_area"], 0, bbox, place, info["concept"]), **info,
+                   "mode": "open_vocabulary"}
+        limits = self._limits() + [
+            f"Open vocabulary: {info['chips_searched']} chips searched "
+            + ("(every chip in the place, CLIP-ranked)" if bbox else f"(county-wide CLIP top {c['top_k_chips']}: NOT exhaustive)"),
+            "Detector: Grounding DINO (zero-shot) on 0.6 m NAIP chips; small or unusual objects are often missed or confused"]
+        if info["low_confidence"]:
+            limits.append("LOW CONFIDENCE concept: eye-checked precision "
+                          + (f"{info['eye_precision_12']}/12" if info["eye_precision_12"] is not None else "not measured")
+                          + f" (below {c['low_confidence_below']}/12)")
+        return self._env(tool, result=Result(geojson=feature_collection(feats), metrics=metrics),
+                         confidence=self._mean_conf(feats) or 0.0,
+                         method=f"CLIP ranks chips for '{info['prompt']}' → {c['detector']} boxes (box ≥ "
+                                f"{c['box_threshold']}, text ≥ {c['text_threshold']}) → SAM 2.1 mask per box → area check "
+                                f"(conf/openvocab.json) → dedupe within {c['nms_m']} m. Confidence = detector score × "
+                                "(0.5 + 0.5 × SAM score), a heuristic",
+                         assumptions=["The text names something visible from above at 0.6 m"], limits=limits,
+                         steps=t.steps)
+
+    def _building_heights(self, feats: Sequence[dict[str, Any]], bbox) -> dict[str, dict[str, Any]]:
+        """Per building id: {height_m, source}. Lidar nDSM (Phase 6) when cached for the area, else Overture's height."""
+        from groundtruth import lidar
+
+        out = {}
+        if lidar.available_for(bbox):
+            out = lidar.building_heights(feats, bbox)
+        for f in feats:
+            p = f["properties"]
+            if p.get("id") not in out and p.get("height") is not None:
+                out[p.get("id")] = {"height_m": float(p["height"]), "source": "overture"}
+        return out
+
+    def find_buildings(self, kind: str = "building", bbox: Sequence[float] | None = None, place: str | None = None,
+                       limit: int = 20000, min_height_m: float | None = None) -> Envelope:
+        """Overture building footprints in a place/bbox, optionally by kind (conf/places_categories.json buildings)."""
+        tool = "find_buildings"
+        from groundtruth.vector import store
+
+        if place and not bbox:
+            bbox = self.place_bbox(place)
+        pc = self._pc()
+        k = next((key for key, v in pc["buildings"].items() if kind.lower() in v["words"] or kind.lower() == key), None)
+        if k is None:
+            return declined(tool, VERSION, f"unknown building kind {kind!r}")
+        classes = pc["buildings"][k]["classes"]
+        t = StepTimer()
+        with t.step("query", f"DuckDB spatial: buildings{' class in ' + str(classes) if classes else ''}"):
+            fc, ms = store().buildings(bbox, classes, limit=limit)
+        feats = []
+        from groundtruth import lidar
+
+        want_h = min_height_m is not None or lidar.available_for(bbox)
+        with t.step("heights", "lidar nDSM (90th pct in footprint) where built, else Overture height") if want_h \
+                else _null_ctx():
+            heights = self._building_heights(fc["features"], bbox) if want_h else {}
+        srcs: dict[str, int] = {}
+        for f in fc["features"]:
+            p = f["properties"]
+            hh = heights.get(p.get("id"), {})
+            h = hh.get("height_m", p.get("height"))
+            if min_height_m is not None and (h is None or h < min_height_m):
+                continue
+            if h is not None:
+                s_ = hh.get("source", "overture")
+                srcs[s_] = srcs.get(s_, 0) + 1
+            gm = to_measure(shape(f["geometry"]))
+            feats.append({"type": "Feature", "id": p.get("id"), "geometry": f["geometry"],
+                          "properties": {"id": p.get("id"), "class": p.get("class"),
+                                         "height_m": None if h is None else round(float(h), 1),
+                                         "height_source": hh.get("source", "overture" if h is not None else None),
+                                         "num_floors": p.get("num_floors"), "area_m2": round(gm.area, 1),
+                                         "area_acres": round(gm.area / SQM_PER_ACRE, 5), "confidence": 0.9,
+                                         "rank": len(feats) + 1, "geometry_kind": "outline"}})
+        limits = ["Overture building footprints (OSM + ML-derived), not checked against the imagery"]
+        if classes:
+            limits.append(pc["buildings_class_coverage_note"])
+        if want_h:
+            limits.append(f"Heights by source: {srcs or 'none'}; buildings without a height are "
+                          + ("excluded by the height filter" if min_height_m is not None else "shown flat"))
+        if want_h and not lidar.available_for(bbox):
+            limits.append("No lidar built for this area yet: heights are Overture's (often missing)")
+        return self._env(tool, status="ok" if len(feats) < limit else "partial",
+                         result=Result(geojson=feature_collection(feats), metrics={
+                             "count": len(feats), "kind": k, "classes": classes, "bbox": list(bbox) if bbox else None,
+                             "place": place, "truncated": len(feats) >= limit,
+                             "area_m2_total": round(sum(f["properties"]["area_m2"] for f in feats), 1)}),
+                         confidence=0.9 if not classes else 0.6,
+                         method="Overture buildings (local parquet) queried with DuckDB spatial by bbox and class",
+                         limits=limits, sources=[self.provider.overture_source("buildings")], steps=t.steps)
 
     def export(self, geojson: dict[str, Any], fmt: str = "geojson", title: str | None = None,
                summary: dict[str, Any] | None = None) -> Envelope:

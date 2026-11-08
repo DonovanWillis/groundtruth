@@ -291,6 +291,42 @@ class PublicDataProvider(DataProvider):
         idx = sorted(int(i) for i in tree.query(box(*bbox), predicate="intersects")) if tree is not None else []
         return {"type": "FeatureCollection", "features": [feats[i] for i in idx]}
 
+    # ---------- routing (Valhalla, built by scripts/build_routing.py from the NC OSM extract) ----------
+    @cached_property
+    def _valhalla(self):
+        import valhalla
+
+        cfg = self.data / "routing" / "valhalla.json"
+        if not cfg.exists():
+            raise FileNotFoundError("no routing graph: run scripts/build_routing.py (gt-routing env)")
+        return valhalla.Actor(str(cfg))
+
+    def isochrone(self, lon: float, lat: float, minutes: float, costing: str = "auto") -> dict[str, Any]:
+        """Travel-time polygon (GeoJSON Feature, EPSG:4326) from a point: costing auto | pedestrian | bicycle.
+        Local Valhalla graph (OSM roads, Mecklenburg + 5 km); free-flow speeds, no live traffic."""
+        cache = self.__dict__.setdefault("_iso_cache", {})
+        key = (round(lon, 5), round(lat, 5), float(minutes), costing)
+        if key not in cache:
+            req = {"locations": [{"lat": lat, "lon": lon}], "costing": costing,
+                   "contours": [{"time": float(minutes)}], "polygons": True, "denoise": 0.5, "generalize": 15}
+            r = json.loads(self._valhalla.isochrone(json.dumps(req)))
+            cache[key] = r["features"][0]
+            if len(cache) > 2000:
+                cache.pop(next(iter(cache)))
+        return cache[key]
+
+    def routing_source(self) -> Source:
+        return Source(name="OpenStreetMap roads (Geofabrik North Carolina extract), routed with Valhalla",
+                      url="https://download.geofabrik.de/north-america/us/north-carolina.html",
+                      date=time.strftime("%Y-%m-%d", time.localtime((self.data / "osm" / "north-carolina.osm.pbf").stat().st_mtime))
+                      if (self.data / "osm" / "north-carolina.osm.pbf").exists() else "",
+                      licence="ODbL 1.0 (© OpenStreetMap contributors); Valhalla MIT")
+
+    def overture_source(self, theme: str) -> Source:
+        return Source(name=f"Overture Maps {theme}", url="https://docs.overturemaps.org/attribution/", date="",
+                      licence=("CDLA-Permissive-2.0 / CC0 / Apache-2.0 per record" if theme == "places"
+                               else "ODbL 1.0 (© OpenStreetMap contributors, Overture Maps Foundation)"))
+
     # ---------- provenance ----------
     def sources(self) -> list[Source]:
         cov = self._coverage

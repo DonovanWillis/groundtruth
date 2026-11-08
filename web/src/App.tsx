@@ -335,7 +335,9 @@ export default function App() {
     if (!def) return;
     setLayersOn((s) => ({ ...s, [key]: on }));
     try {
-      if (on && !layerCache.current[key]) {
+      const vector = !!(await mv.current?.hasVector(key));
+      if (!vector && def.vectorOnly) throw new Error(`${def.label}: vector tiles not available from this API`);
+      if (on && !vector && !layerCache.current[key]) {
         setBusy(`Loading ${def.label}…`);
         let bbox: number[] | undefined;
         if (def.bboxed && mv.current) { const [w, s, e, n] = mv.current.bounds(); const dx = (e - w) * 1.5, dy = (n - s) * 1.5;

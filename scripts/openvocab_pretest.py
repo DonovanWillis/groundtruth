@@ -25,6 +25,7 @@ from shapely.geometry import shape  # noqa: E402
 ap = argparse.ArgumentParser()
 ap.add_argument("--concepts", default=None)
 ap.add_argument("--place", default=None)
+ap.add_argument("--tag", default="", help="suffix for sheet names (A/B runs)")
 a = ap.parse_args()
 eng = Engine(PublicDataProvider(download_scenes=False), aoi="county")
 cons = a.concepts.split(",") if a.concepts else list(conf()["concepts"])
@@ -54,9 +55,9 @@ for con in cons:
         x, y = (k % 6) * T, 20 + (k // 6) * (T + 16)
         sheet.paste(im, (x, y))
         d.text((x + 2, y + T + 1), f"{k + 1} det {p['detector_score']:.2f} {p['area_m2']:.0f} m²", fill=(200, 200, 200))
-    out = config.DATA / "out" / f"openvocab_{re.sub(r'[^a-z0-9]+', '_', con)}.png"
+    out = config.DATA / "out" / f"openvocab_{re.sub(r'[^a-z0-9]+', '_', con)}{a.tag}.png"
     sheet.save(out)
     summary[con] = {"found": len(feats), "sheet": str(out.relative_to(config.ROOT)), **{k: info[k] for k in (
         "chips_searched", "raw_boxes", "boxes_after_dedupe", "rejected_by_area", "ms_total", "device")}}
     print(json.dumps({con: summary[con]}), flush=True)
-(config.DATA / "out" / "openvocab_pretest.json").write_text(json.dumps(summary, indent=1))
+(config.DATA / "out" / f"openvocab_pretest{a.tag}.json").write_text(json.dumps(summary, indent=1))

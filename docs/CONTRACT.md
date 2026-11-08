@@ -76,6 +76,21 @@ built, otherwise the largest indexed slice).
 | `export` | ✅ | `{geojson, format: "geojson"\|"csv"\|"pdf", title?, summary?: {}}` | `metrics.file, download, bytes, content` (inline for text < 2 MB). `pdf` (v0.3) is a one-page summary with thumbnails, sources and limits |
 | `outline` | ✅ (v0.2) | `{examples: [id with #cell], max?: int=12}` | one polygon per id (SAM 2.1 hiera-tiny, prompt = cell box + 5 m + centre point). Properties: `area_m2, area_acres, sam_score, ms, cached`; `metrics.area_acres_total, ms_per_outline`. **Lazy:** call it only for results on screen. Cost: ~1.2 s per new outline on CPU, ~4 ms cached. Pools often include part of the deck |
 
+### Added in v0.5 (master build queue)
+| tool | request body | result |
+|---|---|---|
+| `find_all` | adds `dense?: bool` (null = auto when a dense build exists for the place), `within_layer?: str` | with dense: `metrics.dense=true, dense_matched, dense_added, dense_replaced_boxes, dense_proposals, dense_passed_verifier, dense_built`; dense objects carry `dense_id` and the same `chip#cell:patch` `example` ids |
+| `find_place` | `{query: str, bbox?\|place?, limit?: int=5000}` | Overture places by category word (`conf/places_categories.json`) or name. Points with `name, category, confidence` (Overture's). `metrics.count, match ("category"\|"name"), truncated` |
+| `isochrone` | `{origin: {lon,lat}\|str, minutes?: 10, mode?: "drive"\|"walk"\|"bike"}` | one polygon (Valhalla on OSM roads). `metrics.origins[], minutes, mode, area_km2` |
+| `find_buildings` | `{kind?: "building"\|"house"\|"apartment"\|..., bbox?\|place?, min_height_m?, limit?}` | Overture footprints with `class, height_m, height_source ("lidar"\|"overture"), area_m2`. `metrics.count, kind, classes` |
+| `find_anything` | `{text: str, bbox?\|place?}` | open vocabulary (Grounding DINO + SAM 2.1). Same object properties as find_all plus `detector_score`; `metrics.mode="open_vocabulary", chips_searched, raw_boxes, eye_precision_12, low_confidence` |
+| `filter` | `where.within_minutes_of: {origin: {lon,lat}\|name\|category word, minutes, mode}` | `metrics.travel {origins[], minutes, mode, area_km2}` |
+
+Other v0.5 endpoints: `GET /api/v1/vt` (vector-tile layers) and `GET /api/v1/vt/{layer}/{z}/{x}/{y}.pbf` (gzip MVT,
+source-layer = layer). NAIP tiles add the `X-Tile-Source` header (`local-cog` \| `tile-cache` \| `planetary-computer` \|
+`offline-miss`). `GROUNDTRUTH_OFFLINE=1` blocks every Planetary Computer fetch. `POST /api/v1/agent/run` plans now carry
+`target_kind (concept|place_category|buildings|open), target, minutes, mode, origin, min_height_m`.
+
 ## Open fields (may change before v1)
 - `/api/v1/events` (agent SSE): reserved; the event shape is not defined yet.
 - `confidence` is `null` for the search tools. Calibrated probabilities are planned once labels exist.

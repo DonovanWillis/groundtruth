@@ -78,11 +78,17 @@ class VectorStore:
         return {"type": "FeatureCollection", "features": feats}, round((time.perf_counter() - t0) * 1000, 1)
 
     def places(self, bbox: BBox | None = None, categories: Sequence[str] = (), name: str | None = None,
-               limit: int | None = None):
+               limit: int | None = None, taxonomy: Sequence[str] = ()):
         where, params = [], []
+        cat = []
         if categories:
-            where.append(f"category IN ({', '.join('?' for _ in categories)})")
+            cat.append(f"category IN ({', '.join('?' for _ in categories)})")
             params += list(categories)
+        if taxonomy:
+            cat.append(f"taxonomy_primary IN ({', '.join('?' for _ in taxonomy)})")
+            params += list(taxonomy)
+        if cat:
+            where.append("(" + " OR ".join(cat) + ")")
         if name:
             where.append("lower(name) LIKE ?")
             params.append(f"%{name.lower()}%")

@@ -8,7 +8,6 @@ from typing import Any
 from pyproj import Transformer
 from shapely.geometry import box, mapping, shape
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import transform as shp_transform
 
 WGS84 = "EPSG:4326"
 MEASURE_CRS = "EPSG:32617"
@@ -22,12 +21,26 @@ def transformer(src: str, dst: str) -> Transformer:
     return Transformer.from_crs(src, dst, always_xy=True)
 
 
+def _reproject(geom, src: str, dst: str):
+    """Vectorised reprojection (shapely 2 + pyproj over all coordinates at once; ~10× faster than shapely.ops)."""
+    import numpy as np
+    import shapely
+
+    t = transformer(src, dst)
+
+    def fn(xy):
+        x, y = t.transform(xy[:, 0], xy[:, 1])
+        return np.column_stack([x, y])
+
+    return shapely.transform(geom, fn)
+
+
 def to_measure(geom: BaseGeometry) -> BaseGeometry:
-    return shp_transform(transformer(WGS84, MEASURE_CRS).transform, geom)
+    return _reproject(geom, WGS84, MEASURE_CRS)
 
 
 def to_wgs84(geom: BaseGeometry, src: str = MEASURE_CRS) -> BaseGeometry:
-    return shp_transform(transformer(src, WGS84).transform, geom)
+    return _reproject(geom, src, WGS84)
 
 
 def area_m2(geom_wgs84: BaseGeometry | dict[str, Any]) -> float:

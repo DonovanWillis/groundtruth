@@ -10,7 +10,14 @@ export const LANDING_CHIPS = [
 export const AGENT_CHIPS = [...LANDING_CHIPS, "parking lots in Uptown (experimental)", "solar on warehouses (experimental)"];
 export const DEFAULT_PLACES = ["Ballantyne", "NoDa", "South End", "Myers Park", "Lake Norman", "University City", "Matthews", "Uptown"];
 
-export type LayerDef = { key: string; label: string; color: string; kind: "line" | "circle" | "fill"; bboxed?: boolean };
+/** Context layer. Shown from vector tiles (GET /api/v1/vt) when the API lists the key, else as GeoJSON from add_layer.
+ *  vectorOnly: no GeoJSON fallback. geojsonOnly: ignore the tiles (they do not match what add_layer shows).
+ *  opacity / radius / edge override the default look (subtle Overture layers). */
+export type LayerDef = {
+  key: string; label: string; color: string; kind: "line" | "circle" | "fill"; bboxed?: boolean;
+  vectorOnly?: boolean; geojsonOnly?: boolean; opacity?: number; radius?: number; edge?: string; attribution?: string;
+};
+const OVERTURE_ATTRIBUTION = "© OpenStreetMap contributors, Overture Maps Foundation";
 export const CONTEXT_LAYERS: LayerDef[] = [
   { key: "osm_i485", label: "I-485", color: "#1457cc", kind: "line" },
   { key: "osm_i77", label: "I-77", color: "#5847b8", kind: "line" },
@@ -19,6 +26,10 @@ export const CONTEXT_LAYERS: LayerDef[] = [
   { key: "osm_light_rail_stations", label: "Light-rail stations", color: "#b42318", kind: "circle" },
   { key: "fema_flood_zones", label: "Flood zones (FEMA)", color: "#1f8fc4", kind: "fill", bboxed: true },
   { key: "osm_unc_charlotte_campus", label: "UNC Charlotte campus", color: "#3b6b1e", kind: "fill" },
+  { key: "overture_buildings", label: "Buildings (Overture)", color: "#6b6b68", kind: "fill", vectorOnly: true,
+    opacity: 0.18, edge: "#ffffff", attribution: OVERTURE_ATTRIBUTION },
+  { key: "overture_places", label: "Places (Overture)", color: "#8a5a00", kind: "circle", vectorOnly: true, radius: 2.5,
+    attribution: OVERTURE_ATTRIBUTION },
 ];
 export const layerLabel = (k: string) => CONTEXT_LAYERS.find((l) => l.key === k)?.label ?? k;
 

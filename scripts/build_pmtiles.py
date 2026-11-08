@@ -31,7 +31,7 @@ for name, c in conf["layers"].items():
             feats = fc["features"]
             keep = c.get("properties")
         else:
-            p = config.DATA / "layers" / f"{name}.geojson"
+            p = config.DATA / "layers" / ("web/" if c.get("source") == "web" else "") / f"{name}.geojson"
             if not p.exists():
                 print(f"skip {name}: no {p.name}")
                 continue

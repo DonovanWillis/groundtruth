@@ -10,7 +10,7 @@ if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
 fi
 if [ "${GROUNDTRUTH_GPU:-0}" = "1" ]; then  # query-time GPU (approved window), 4 GB cap, backs off when busy
   source "$HOME/.venvs/groundtruth-gpu/bin/activate"
-  export GROUNDTRUTH_DEVICE=cuda GROUNDTRUTH_VRAM_GB="${GROUNDTRUTH_VRAM_GB:-4}"
+  export GROUNDTRUTH_DEVICE=cuda GROUNDTRUTH_VRAM_GB="${GROUNDTRUTH_VRAM_GB:-6.5}"
 else
   source "${GROUNDTRUTH_VENV:-$HOME/.venvs/groundtruth}/bin/activate"
   export GROUNDTRUTH_DEVICE="${GROUNDTRUTH_DEVICE:-cpu}"

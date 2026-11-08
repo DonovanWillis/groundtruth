@@ -5,11 +5,14 @@ import type { Bbox, FC } from "./api";
 import { COLORS, CONTEXT_LAYERS, LayerDef } from "./config";
 
 const EMPTY: FC = { type: "FeatureCollection", features: [] };
+/** One entry of GET /api/v1/vt: gzip MVT tiles, source-layer name == layer key. */
+type VtLayer = { minzoom: number; maxzoom: number; url: string };
 
 export class MapView {
   map: MlMap;
   private ready: Promise<void>;
   private year = 0;
+  private vt: Record<string, VtLayer> = {};
   onResultClick: (example: string) => void = () => {};
 
   constructor(container: HTMLElement) {
@@ -29,9 +32,17 @@ export class MapView {
       compact: true,
       customAttribution: "NAIP (USDA, public domain) · © OpenStreetMap contributors · FEMA NFHL · US Census",
     }));
+    // Bench hook (scripts/ui_bench.py): the map and the time of every 'idle' event, nothing else.
+    const w = window as any;
+    w.__gtMap = m; w.__gtIdleTimes = [];
+    m.on("idle", () => { w.__gtMapIdle = true; w.__gtIdleTimes.push(performance.now()); });
+    m.on("dataloading", () => { w.__gtMapIdle = false; });
     m.dragRotate.disable();
     m.touchZoomRotate.disableRotation();
-    this.ready = new Promise((res) => m.on("load", () => { this.setup(); res(); }));
+    // Vector-tile catalogue; an older API without /vt (or an error) just means every layer falls back to GeoJSON.
+    const vt: Promise<Record<string, VtLayer>> = fetch("/api/v1/vt").then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+    const loaded = new Promise<void>((res) => m.on("load", () => { this.setup(); res(); }));
+    this.ready = Promise.all([vt, loaded]).then(([v]) => { this.vt = v && typeof v === "object" ? v : {}; });
   }
 
   private setup() {
@@ -93,30 +104,53 @@ export class MapView {
     (this.map.getSource("pick") as GeoJSONSource).setData(fc as any);
   }
 
+  /** True when the API serves this context layer as vector tiles (then no GeoJSON fetch is needed). */
+  async hasVector(key: string) {
+    await this.ready;
+    return key in this.vt && !CONTEXT_LAYERS.find((l) => l.key === key)?.geojsonOnly;
+  }
+
+  /** Context layer: vector tiles when /api/v1/vt lists it, else the GeoJSON passed in (fallback). */
   async setContext(def: LayerDef, data: FC | null, visible: boolean) {
     await this.ready;
     const m = this.map;
     const id = `ctx-${def.key}`;
-    if (data) {
+    const vt = def.geojsonOnly ? undefined : this.vt[def.key];
+    if (vt) {
+      // Tiles cover the whole county, so any envelope GeoJSON (agent add_layer) is already on screen.
+      if (visible && !m.getSource(id)) {
+        m.addSource(id, { type: "vector", tiles: [`${window.location.origin}${vt.url}`], minzoom: vt.minzoom,
+          maxzoom: vt.maxzoom, ...(def.attribution ? { attribution: def.attribution } : {}) });
+        this.addContextLayers(def, id, def.key);
+      }
+    } else if (data) {
       if (m.getSource(id)) (m.getSource(id) as GeoJSONSource).setData(data as any);
       else {
-        m.addSource(id, { type: "geojson", data: data as any });
-        if (def.kind === "fill") {
-          m.addLayer({ id, type: "fill", source: id, paint: { "fill-color": def.color, "fill-opacity": 0.4 } }, "anchor-context");
-          m.addLayer({ id: `${id}-edge`, type: "line", source: id, paint: { "line-color": "#e8f6ff", "line-width": 1, "line-opacity": 0.8 } }, "anchor-context");
-        } else if (def.kind === "circle") {
-          m.addLayer({ id, type: "circle", source: id, paint: { "circle-color": def.color, "circle-radius": 5,
-            "circle-stroke-color": "#fff", "circle-stroke-width": 1.5 } });
-        } else {
-          m.addLayer({ id: `${id}-casing`, type: "line", source: id, paint: { "line-color": "#ffffff", "line-width": 5.5, "line-opacity": 0.85 },
-            layout: { "line-cap": "round", "line-join": "round" } }, "anchor-context");
-          m.addLayer({ id, type: "line", source: id, paint: { "line-color": def.color, "line-width": 3 },
-            layout: { "line-cap": "round", "line-join": "round" } }, "anchor-context");
-        }
+        m.addSource(id, { type: "geojson", data: data as any, ...(def.attribution ? { attribution: def.attribution } : {}) });
+        this.addContextLayers(def, id);
       }
     }
     for (const lid of [id, `${id}-edge`, `${id}-casing`])
       if (m.getLayer(lid)) m.setLayoutProperty(lid, "visibility", visible ? "visible" : "none");
+  }
+
+  private addContextLayers(def: LayerDef, id: string, sourceLayer?: string) {
+    const m = this.map;
+    const src: any = sourceLayer ? { source: id, "source-layer": sourceLayer } : { source: id };
+    if (def.kind === "fill") {
+      m.addLayer({ id, type: "fill", ...src, paint: { "fill-color": def.color, "fill-opacity": def.opacity ?? 0.4 } }, "anchor-context");
+      m.addLayer({ id: `${id}-edge`, type: "line", ...src, paint: { "line-color": def.edge ?? "#e8f6ff", "line-width": 1,
+        "line-opacity": def.opacity != null ? Math.min(1, def.opacity * 2) : 0.8 } }, "anchor-context");
+    } else if (def.kind === "circle") {
+      const r = def.radius ?? 5;
+      m.addLayer({ id, type: "circle", ...src, paint: { "circle-color": def.color, "circle-radius": r,
+        "circle-stroke-color": "#fff", "circle-stroke-width": r < 4 ? 0.8 : 1.5 } });
+    } else {
+      m.addLayer({ id: `${id}-casing`, type: "line", ...src, paint: { "line-color": "#ffffff", "line-width": 5.5, "line-opacity": 0.85 },
+        layout: { "line-cap": "round", "line-join": "round" } }, "anchor-context");
+      m.addLayer({ id, type: "line", ...src, paint: { "line-color": def.color, "line-width": 3 },
+        layout: { "line-cap": "round", "line-join": "round" } }, "anchor-context");
+    }
   }
 
   /** Agent-provided layer (add_layer with source "envelope"). Known context keys reuse their style. */
