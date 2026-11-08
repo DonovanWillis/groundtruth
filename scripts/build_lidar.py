@@ -82,16 +82,16 @@ def build(place: str, bbox: list[float], max_depth: int, log=print) -> dict:
     n_pts = [0, 0]
 
     def fetch(k: str):
-        for attempt in range(4):
+        for attempt in range(8):  # survives DNS / network blips (laptop sleep, Wi-Fi)
             try:
                 with httpx.Client(timeout=180) as c:
                     r = c.get(EPT + f"ept-data/{k}.laz")
                     r.raise_for_status()
                     return laspy.read(io.BytesIO(r.content))
             except Exception:
-                if attempt == 3:
+                if attempt == 7:
                     raise
-                time.sleep(2 * (attempt + 1))
+                time.sleep(min(60, 2 ** (attempt + 1)))
 
     done = 0
     with cf.ThreadPoolExecutor(8) as ex:

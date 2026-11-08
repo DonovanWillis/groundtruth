@@ -205,10 +205,13 @@ EXPORT_RE = re.compile(r"^\s*(?:please\s+)?(?:export|download|save)\b(?:.*?\b(cs
 MAX_INTERMEDIATE_FEATURES = 500
 
 
-def run(engine_for, text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
+def run(engine_for, text: str, context: dict[str, Any] | None = None, plan_override: Plan | None = None,
+        follow_up: bool | None = None) -> dict[str, Any]:
     """engine_for(year) → Engine. ``context`` (from the UI): {place: the place on screen, last_text: the previous
     request}; a request without a place uses context.place, and "export them as CSV" exports the last request's result.
-    Deterministic, so results are cached per (text, context) (GROUNDTRUTH_PLANNER_CACHE entries, default 64).
+    ``plan_override``: a plan made elsewhere (the local LLM, already validated) executed by the same deterministic
+    executor; ``follow_up`` says whether it refines the previous request. Deterministic, so results are cached per
+    (text, context, plan) (GROUNDTRUTH_PLANNER_CACHE entries, default 64).
     Returns {planner, plan, steps:[{ref, tool, envelope}], actions:[...], status, cached}."""
     import copy
     import os
@@ -222,18 +225,21 @@ def run(engine_for, text: str, context: dict[str, Any] | None = None) -> dict[st
     # refines the previous request: the effective request is the previous one + this one
     if context.get("last_text") and not EXPORT_RE.search(text) and not _people(text):
         p0 = parse(text)
-        if not p0.target_kind and (p0.place or p0.require or p0.sort or p0.docks_new_since or p0.layer or p0.minutes):
+        is_fu = follow_up if follow_up is not None else (
+            not p0.target_kind and (p0.place or p0.require or p0.sort or p0.docks_new_since or p0.layer or p0.minutes))
+        if is_fu:
             prev = context["last_text"]
             text = f"{prev} {text}"
             context = {k: v for k, v in context.items() if k != "last_text"}
             context["_follow_up_of"] = prev
-    key = json.dumps([text.strip().lower(), context], sort_keys=True)
+    key = json.dumps([text.strip().lower(), context, asdict(plan_override) if plan_override else None],
+                     sort_keys=True, default=str)
     if key in _CACHE:
         _CACHE.move_to_end(key)
         out = copy.deepcopy(_CACHE[key])
         out["cached"] = True
         return out
-    out = _run(engine_for, text, context)
+    out = _run(engine_for, text, context, plan_override)
     if out["status"] in ("ok", "declined"):
         _CACHE[key] = copy.deepcopy(out)
         while len(_CACHE) > int(os.environ.get("GROUNDTRUTH_PLANNER_CACHE", "64")):
@@ -269,8 +275,10 @@ def _slim(steps: list[dict[str, Any]], keep_refs: set[str], actions: list[dict[s
                 seen = True
 
 
-def _run(engine_for, text: str, context: dict[str, Any]) -> dict[str, Any]:
-    plan = parse(text)
+def _run(engine_for, text: str, context: dict[str, Any], plan_override: Plan | None = None) -> dict[str, Any]:
+    plan = plan_override if plan_override is not None else parse(text)
+    if plan_override is not None:
+        plan.text = text
     steps: list[dict[str, Any]] = []
     actions: list[dict[str, Any]] = []
     extra: dict[str, Any] = {}
