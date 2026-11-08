@@ -396,6 +396,7 @@ class FindPlaceIn(Common):
     bbox: list[float] | None = None
     place: str | None = None
     limit: int = Field(5000, ge=1, le=20000)
+    origin: list[float] | None = Field(default=None, min_length=2, max_length=2)
 
 
 class IsochroneIn(Common):
@@ -420,7 +421,8 @@ class FindAnythingIn(Common):
 
 @app.post("/api/v1/tools/find_place")
 def t_find_place(b: FindPlaceIn) -> JSONResponse:
-    return _env(eng(b.aoi, b.year).find_place(b.query, bbox=b.bbox, place=b.place, limit=b.limit))
+    return _env(eng(b.aoi, b.year).find_place(b.query, bbox=b.bbox, place=b.place,
+                                              limit=b.limit, origin=b.origin))
 
 
 @app.post("/api/v1/tools/isochrone")

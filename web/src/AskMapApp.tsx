@@ -252,9 +252,10 @@ export default function AskMapApp() {
     setProblem("");
     try {
       const index = healthInfo?.indexes.find((item) => item.year === healthInfo.primary_year);
+      const origin: [number, number] = [(area.bbox[0] + area.bbox[2]) / 2, (area.bbox[1] + area.bbox[3]) / 2];
       const envelope = await tool(kind === "places" ? "find_place" : "find_buildings", {
         ...(index ? { aoi: index.aoi } : {}), bbox: area.bbox, limit: 50,
-        ...(kind === "places" ? { query: term } : { kind: term }),
+        ...(kind === "places" ? { query: term, origin } : { kind: term }),
       });
       if (envelope.status === "declined") { append("assistant", envelope.declined_reason || "This search is unavailable."); return; }
       const features = envelope.result.geojson.features;
@@ -313,7 +314,7 @@ export default function AskMapApp() {
           {resultSet.features.length > 0 && <div className="ask-card-list">{resultSet.features.map((feature, index) => {
             const id = featureId(feature, index);
             return <button key={`${id}-${index}`} ref={(node) => { cards.current[id] = node; }} type="button" className={`ask-result-card${selected === id ? " is-selected" : ""}`} onClick={() => selectResult(id, feature)}>
-              <span className="ask-result-number">{index + 1}</span><span className="ask-result-copy"><strong>{resultLabel(feature, index)}</strong><small>{feature.properties.category || (resultSet.kind === "buildings" ? "Building" : "Place")}</small><small>{feature.properties.price_source ? "Price data available" : "Price and menu details unavailable"}</small></span>
+              <span className="ask-result-number">{index + 1}</span><span className="ask-result-copy"><strong>{resultLabel(feature, index)}</strong><small>{feature.properties.category || (resultSet.kind === "buildings" ? "Building" : "Place")}{typeof feature.properties.dist_m === "number" ? ` · ${Math.round(feature.properties.dist_m)} m straight-line` : ""}</small><small>{feature.properties.price_source ? "Price data available" : "Price and menu details unavailable"}</small></span>
             </button>;
           })}</div>}
           <p className="ask-source">Source: {resultSet.envelope.sources.map((source) => `${source.name} (${source.licence}, ${source.date})`).join(", ") || "Source unavailable"}. {resultSet.envelope.limits[0] || "Coverage varies by area."}</p>
