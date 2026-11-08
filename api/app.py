@@ -300,6 +300,18 @@ def layers() -> list[str]:
     return _provider.layer_names()
 
 
+@app.get("/api/v1/geocode")
+async def geocode(q: str) -> dict[str, Any]:
+    """Resolve an address typed by the user; never infer device location."""
+    if len(q.strip()) > 200:
+        raise HTTPException(422, "address query is too long")
+    try:
+        candidates = await _provider.geocode(q)
+    except Exception as exc:
+        raise HTTPException(502, "address search is temporarily unavailable") from exc
+    return {"query": q.strip(), "candidates": candidates}
+
+
 @app.get("/api/v1/chips/{chip_id}.jpg")
 def chip(chip_id: str, year: int | None = None, aoi: str | None = None) -> Response:
     y = year or int(chip_id.split("_", 1)[0])

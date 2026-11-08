@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import asyncio
 from functools import cached_property
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,7 @@ import rasterio
 from rasterio.enums import Resampling
 from rasterio.transform import from_origin
 from rasterio.vrt import WarpedVRT
-from shapely.geometry import box, mapping, shape
+from shapely.geometry import Point, box, mapping, shape
 
 from groundtruth import config
 from groundtruth.envelope import Source
@@ -50,6 +51,49 @@ class PublicDataProvider(DataProvider):
         self.download_scenes = download_scenes
         self.cog_cache = Path(cog_cache or os.environ.get("GROUNDTRUTH_COG_CACHE")
                               or Path.home() / ".cache" / "groundtruth" / "naip")
+        self._geocode_lock = asyncio.Lock()
+        self._geocode_last = 0.0
+
+    async def geocode(self, query: str) -> list[dict[str, Any]]:
+        """User-initiated OSM Nominatim lookup, county-clipped and cached outside Git."""
+        import httpx
+
+        q = query.strip()
+        if not q:
+            return []
+        cache_path = self.data / "cache" / "ask_geocode.json"
+        async with self._geocode_lock:
+            cache = json.loads(cache_path.read_text()) if cache_path.exists() else {}
+            key = q.casefold()
+            if key in cache:
+                return cache[key]
+            wait = 1.1 - (time.monotonic() - self._geocode_last)
+            if wait > 0 and self._geocode_last:
+                await asyncio.sleep(wait)
+            county = shape(self.get_boundary()["geometry"])
+            w, s, e, n = county.bounds
+            async with httpx.AsyncClient(timeout=15, headers={"User-Agent":
+                                         "Groundtruth/0.1 (https://github.com/DonovanWillis/groundtruth)"}) as client:
+                response = await client.get("https://nominatim.openstreetmap.org/search", params={
+                    "q": q, "format": "jsonv2", "limit": 6, "countrycodes": "us", "viewbox": f"{w},{n},{e},{s}"})
+            self._geocode_last = time.monotonic()
+            response.raise_for_status()
+            candidates = []
+            for item in response.json():
+                lon, lat = float(item["lon"]), float(item["lat"])
+                point = Point(lon, lat)
+                if not county.covers(point):
+                    continue
+                south, north, west, east = (float(v) for v in item["boundingbox"])
+                candidates.append({"label": item["display_name"], "center": [lon, lat],
+                                   "bbox": [west, south, east, north],
+                                   "source": "OpenStreetMap Nominatim (ODbL 1.0; © OpenStreetMap contributors)"})
+            cache[key] = candidates
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = cache_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(cache, indent=2))
+            os.replace(tmp, cache_path)
+            return candidates
 
     # ---------- boundary + coverage ----------
     @cached_property

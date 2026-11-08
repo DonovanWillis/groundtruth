@@ -15,6 +15,7 @@ Every tool, whether an engine function, an HTTP route or an agent action, return
 | display tiles | `GET /api/v1/tiles/naip/{year}/{z}/{x}/{y}.png` (XYZ, z 10–18; USDA NAIP via Planetary Computer, cached) |
 | boundary | `GET /api/v1/boundary` → the Mecklenburg County GeoJSON Feature |
 | places | `GET /api/v1/places` → `{source, places: {name: [w,s,e,n]}}`: neighbourhood boxes (OSM Nominatim, ODbL) for `place` / `inside_place` |
+| address search | `GET /api/v1/geocode?q=<user-entered address>` → `{query, candidates: [{label, center: [lon,lat], bbox: [w,s,e,n], source}]}`. The client must require an explicit selection; no device location is read. OSM Nominatim results are cached and limited to Mecklenburg County. |
 | export files | `GET /api/v1/exports/{name}` → the file that an `export` call wrote (`metrics.download`) |
 | agent stream | `GET /api/v1/events` (SSE). **Reserved**; not implemented in v0.1 |
 
