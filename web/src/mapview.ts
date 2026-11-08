@@ -26,8 +26,6 @@ export class MapView {
       center: [-80.825, 35.058], zoom: 13.2, maxZoom: 19.5, attributionControl: false,
     });
     const m = this.map;
-    m.addControl(new maplibregl.NavigationControl({ visualizePitch: false, showCompass: false }), "bottom-right");
-    m.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
     m.addControl(new maplibregl.AttributionControl({
       compact: true,
       customAttribution: "NAIP (USDA, public domain) · © OpenStreetMap contributors · FEMA NFHL · US Census",
@@ -47,12 +45,24 @@ export class MapView {
 
   private setup() {
     const m = this.map;
+    // attribution stays folded to its (i) button until asked for
+    m.getContainer().querySelector(".maplibregl-ctrl-attrib")?.classList.remove("maplibregl-compact-show");
     m.addSource("boundary", { type: "geojson", data: "/api/v1/boundary" });
     m.addLayer({ id: "anchor-imagery", type: "background", paint: { "background-opacity": 0 } });
     m.addLayer({ id: "boundary", type: "line", source: "boundary",
       paint: { "line-color": "#ffffff", "line-width": 1.4, "line-dasharray": [3, 2], "line-opacity": 0.9 } });
     m.addLayer({ id: "anchor-context", type: "background", paint: { "background-opacity": 0 } });
-    for (const id of ["pick", "agent"]) m.addSource(id, { type: "geojson", data: EMPTY as any });
+    for (const id of ["pick", "agent", "heat"]) m.addSource(id, { type: "geojson", data: EMPTY as any });
+    // heatmap action: a soft glow of where the referenced features are (centroids), no count
+    m.addLayer({ id: "heat", type: "heatmap", source: "heat", layout: { visibility: "none" }, paint: {
+      "heatmap-weight": 1,
+      "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 9, 0.9, 14, 1.6],
+      "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 9, 22, 12, 42, 15, 70],
+      "heatmap-opacity": 0.85,
+      "heatmap-color": ["interpolate", ["linear"], ["heatmap-density"],
+        0, "rgba(255,43,214,0)", 0.15, "rgba(255,43,214,0.22)", 0.45, "rgba(255,43,214,0.55)",
+        0.75, "rgba(255,120,230,0.8)", 1, "rgba(255,225,248,0.95)"],
+    } as any });
     this.addResultLayers();
     m.addLayer({ id: "pick", type: "line", source: "pick", paint: { "line-color": "#ffffff", "line-width": 3 } });
     m.addLayer({ id: "pick-inner", type: "line", source: "pick", paint: { "line-color": COLORS.pick, "line-width": 1.5 } });
@@ -245,12 +255,38 @@ export class MapView {
 
   private spot = true;
   private hasResults = false;
+  private hasHeat = false;
   private exhaustive = false;
   /** Spotlight: dim the imagery ~30 % while results are showing (toggle in the UI, default on). */
   async setSpotlight(on: boolean) {
     await this.ready;
     this.spot = on;
-    this.map.setLayoutProperty("spotlight", "visibility", on && this.hasResults ? "visible" : "none");
+    this.syncSpot();
+  }
+  private syncSpot() {
+    this.map.setLayoutProperty("spotlight", "visibility", this.spot && (this.hasResults || this.hasHeat) ? "visible" : "none");
+  }
+
+  /** heatmap action: centroids of the referenced features as a soft glow (null clears it). */
+  async setHeat(fc: FC | null) {
+    await this.ready;
+    const pts: GeoJSON.Feature[] = [];
+    for (const f of fc?.features ?? []) { const c = f.geometry ? centroid(f.geometry) : null;
+      if (c) pts.push({ type: "Feature", geometry: { type: "Point", coordinates: c }, properties: {} }); }
+    (this.map.getSource("heat") as GeoJSONSource).setData({ type: "FeatureCollection", features: pts });
+    this.hasHeat = pts.length > 0;
+    this.map.setLayoutProperty("heat", "visibility", this.hasHeat ? "visible" : "none");
+    this.syncSpot();
+  }
+
+  /** Landing: a still, boundary-free view (the page blurs it); off = the working map. */
+  async setLanding(on: boolean) {
+    await this.ready;
+    this.map.setLayoutProperty("boundary", "visibility", on ? "none" : "visible");
+    const h = this.map;
+    for (const k of ["dragPan", "scrollZoom", "boxZoom", "doubleClickZoom", "keyboard", "touchZoomRotate"] as const)
+      on ? (h as any)[k].disable() : (h as any)[k].enable();
+    if (!on) h.touchZoomRotate.disableRotation();
   }
 
   whenReady() { return this.ready; }
@@ -285,7 +321,7 @@ export class MapView {
     (m.getSource("results-pts") as GeoJSONSource).setData({ type: "FeatureCollection", features: pts });
     (m.getSource("results-cl") as GeoJSONSource).setData({ type: "FeatureCollection", features: cl });
     this.hasResults = fc.features.some((f) => f.properties.state !== "rejected");
-    m.setLayoutProperty("spotlight", "visibility", this.spot && this.hasResults ? "visible" : "none");
+    this.syncSpot();
     this.setPulsing(selId);
     if (!this.hasResults) { this.setHover(null); this.popup.remove(); }
     this.updateClusterLabels();
@@ -354,9 +390,15 @@ export class MapView {
     if (style?.color) this.map.setPaintProperty("agent-line", "line-color", style.color);
   }
 
+  /** Left inset (px) the camera keeps clear for the chat panel. */
+  inset = 0;
+  /** Camera move: eased, 1.5 s by default (0 when the user prefers reduced motion). */
   fitBbox(b: Bbox | number[], opts: { maxZoom?: number; padding?: number; duration?: number } = {}) {
     const [w, s, e, n] = b;
-    this.map.fitBounds([[w, s], [e, n]], { padding: opts.padding ?? 60, maxZoom: opts.maxZoom ?? 17, duration: opts.duration ?? 900 });
+    const p = opts.padding ?? 60;
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    this.map.fitBounds([[w, s], [e, n]], { padding: { top: p, bottom: p, right: p, left: p + this.inset },
+      maxZoom: opts.maxZoom ?? 17, duration: reduce ? 0 : opts.duration ?? 1500, easing: easeInOutCubic, essential: false });
   }
 
   bounds(): Bbox {
@@ -368,6 +410,7 @@ export class MapView {
   remove() { this.setPulsing(null); this.map.remove(); }
 }
 
+const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const PT_SRCS = ["results-pts", "results-cl"] as const;
 const PULSE_MS = 6000;
 

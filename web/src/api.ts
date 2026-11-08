@@ -135,6 +135,10 @@ export type AgentResponse = {
   status: "ok" | "partial" | "declined";
   steps: AgentStep[];
   actions: Record<string, any>[];
+  brain?: string;
+  current_ref?: string;
+  ask?: string;
+  cached?: boolean;
 };
 
 /** POST /api/v1/agent/run: the server-side deterministic rules planner (no LLM). */
