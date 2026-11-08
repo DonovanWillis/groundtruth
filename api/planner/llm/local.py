@@ -220,6 +220,8 @@ def llm_reply(template: str, steps: list[dict[str, Any]]) -> tuple[str, dict[str
     info: dict[str, Any] = {}
     if template in _REPLY_CACHE:
         return _REPLY_CACHE[template], {"ms": 0, "cached": True}
+    if len(re.sub(r"\s*\(step_\d+\)", "", template).split()) <= int(os.environ.get("LOCAL_LLM_REPLY_MIN_WORDS", "20")):
+        return template, {"ms": 0, "skipped": "already one short sentence"}  # nothing to gain from a rewrite
     allowed = _numbers(template)
     for s in steps:
         allowed |= _numbers(json.dumps((s.get("envelope", {}).get("result") or {}).get("metrics", {})))
