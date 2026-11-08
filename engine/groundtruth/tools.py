@@ -37,9 +37,15 @@ PEOPLE_TERMS = ("owner", "who owns", " owns ", "owned by", "who lives", "lives a
 NOT_IMPLEMENTED = "not_implemented"
 
 
+_PEOPLE_RE = __import__("re").compile(
+    r"\brat(e|es|ed|ing|ings)\b.*\bschools?\b|\bschools?\b.*\brat(e|es|ed|ing|ings)\b|\bbest schools?\b|"
+    r"\bworst schools?\b|\bschool (scores?|quality|rankings?)\b|\bpeople\b|\bwho (lives?|owns?|is|are)\b|\bhousehold\b")
+
+
 def _people(query: str) -> bool:
+    """People-data policy (runs BEFORE any planner or model): owners, residents, demographics, crime, school ratings."""
     q = query.lower()
-    return any(t in q for t in PEOPLE_TERMS)
+    return any(t in q for t in PEOPLE_TERMS) or bool(_PEOPLE_RE.search(q))
 
 
 def load_senses() -> dict[str, Any]:

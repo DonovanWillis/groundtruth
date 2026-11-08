@@ -30,7 +30,7 @@ def chat(engine_for, text: str, context: dict[str, Any] | None) -> dict[str, Any
         out["brain_fallback"] = pinfo.get("error") or "invalid plan"
         out["llm_plan_ms"] = pinfo.get("ms")
         return out
-    p = local.to_plan(plan, text)
+    p, hnotes = local.hybrid_plan(plan, text, context.get("last_text"))
     if not p.target_kind and context.get("last_text"):
         # the model saw no target: treat as a follow-up of the previous request through the rules path
         out = rules_run(engine_for, text, context)
@@ -40,6 +40,7 @@ def chat(engine_for, text: str, context: dict[str, Any] | None) -> dict[str, Any
     out = rules_run(engine_for, text, context, plan_override=p, follow_up=bool(plan.get("follow_up")))
     out["brain"] = local.BRAIN
     out["llm_plan"] = plan
+    out["hybrid_notes"] = hnotes
     out["llm_plan_ms"] = pinfo.get("ms")
     out["think_leak"] = bool(pinfo.get("think_leak"))
     # 4. reply: rewrite the template answer; the number guard keeps every number tied to an envelope

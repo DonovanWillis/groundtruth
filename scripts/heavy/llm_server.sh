@@ -20,7 +20,7 @@ supervise() {
     rotate
     echo "$(date -Is) starting llama-server" >> "$SLOG"
     "$BIN" -m "$MODEL" --host 127.0.0.1 --port "$LLM_PORT" -t "$LLM_THREADS" -c "$LLM_CTX" -np "$LLM_SLOTS" \
-      --jinja --chat-template-kwargs '{"enable_thinking": false}' --reasoning-budget 0 --cache-reuse 256 \
+      --jinja --reasoning off --cache-reuse 256 \
       --metrics --no-webui >> "$LOG" 2>&1 &
     echo $! > "$SRV_PID"; wait "$(cat "$SRV_PID")"; rc=$?
     echo "$(date -Is) llama-server exited rc=$rc" >> "$SLOG"

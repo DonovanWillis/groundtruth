@@ -11,7 +11,7 @@ alive() { [ -f "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null; }
 loop() {
   while [ ! -f "$D/tunnel.stop" ]; do
     echo "$(date -Is) connecting" >> "$LOG"
-    ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+    ssh -N -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$HOME/.ssh/known_hosts /mnt/c/Users/orynt/.ssh/known_hosts" -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
       -o ConnectTimeout=15 -L "127.0.0.1:$PORT:127.0.0.1:$PORT" "$USER_@$HOST" >> "$LOG" 2>&1
     echo "$(date -Is) tunnel exited rc=$?; retry in 5 s" >> "$LOG"
     sleep 5
