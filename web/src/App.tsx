@@ -99,6 +99,7 @@ export default function App() {
   // ---------------- agent ----------------
   const [agentMsgs, setAgentMsgs] = useState<AgentMsg[]>([]);
   const [agentRunning, setAgentRunning] = useState(false);
+  const lastAgentText = useRef<string | null>(null);  // context for follow-ups ("export them as CSV")
   const [agentText, setAgentText] = useState(AGENT_DEMO_PROMPT);
 
   const [busy, setBusy] = useState<string | null>(null);
@@ -478,6 +479,7 @@ export default function App() {
     try {
       const res = await runRulesPlanner(text, target, {
         aoi: aoiRef.current || undefined,
+        context: { place: placeRef.current, last_text: lastAgentText.current },
         onError: (msg) => push({ kind: "error", text: msg }),
         onResponse: (r) => {
           plan = r.plan ?? {};
@@ -486,6 +488,7 @@ export default function App() {
           setAskedText(String(plan.concept_query ?? plan.concept ?? text));
         },
       });
+      if (res.status === "ok" && !res.plan?.exported_from) lastAgentText.current = text;
       if (res.status === "declined") {
         push({ kind: "status", status: "declined" });
         if (!res.actions?.some((a) => a.action === "say")) push({ kind: "error", text: "The planner declined this request." });

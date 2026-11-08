@@ -51,8 +51,9 @@ export class AgentRun {
 /** Run the rules planner for `text`, publish every step envelope to the work log (origin "agent"), then apply the
  *  actions in order. Returns the raw response; per-action errors go to `onError` and do not stop later actions. */
 export async function runRulesPlanner(text: string, target: AgentTarget,
-  opts: { aoi?: string; onError?: (msg: string) => void; onResponse?: (res: AgentResponse) => void } = {}): Promise<AgentResponse> {
-  const res = await agentRun(text, opts.aoi);
+  opts: { aoi?: string; context?: { place?: string | null; last_text?: string | null }; onError?: (msg: string) => void;
+          onResponse?: (res: AgentResponse) => void } = {}): Promise<AgentResponse> {
+  const res = await agentRun(text, opts.aoi, opts.context);
   opts.onResponse?.(res);
   const run = new AgentRun(target);
   for (const s of res.steps ?? []) {

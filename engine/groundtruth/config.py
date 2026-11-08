@@ -46,3 +46,25 @@ def offline() -> bool:
     """GROUNDTRUTH_OFFLINE=1 blocks every outbound fetch to Planetary Computer (tiles + imagery): local caches only.
     Used to prove the hero flow works with the network unplugged (without touching the system network)."""
     return os.environ.get("GROUNDTRUTH_OFFLINE", "0") == "1"
+
+
+def data_version(kind: str) -> str:
+    """Current version of a rebuildable data product (conf/data_versions.json; env GROUNDTRUTH_DATA_<KIND> overrides)."""
+    env = os.environ.get(f"GROUNDTRUTH_DATA_{kind.upper()}")
+    if env:
+        return env
+    import json as _json
+
+    return _json.loads((SENSES_PATH.parent / "data_versions.json").read_text()).get(kind, "v1")
+
+
+def data_dir(kind: str, version: str | None = None) -> Path:
+    """data/<kind>/<version>/ — read paths for the demo; rebuild scripts pass an explicit new version."""
+    return DATA / kind / (version or data_version(kind))
+
+
+def next_data_dir(kind: str) -> Path:
+    """A NEW version folder for a rebuild: data/<kind>/v<N+1>/ (never the version the demo reads)."""
+    root = DATA / kind
+    ns = [int(p.name[1:]) for p in root.glob("v*") if p.name[1:].isdigit()] if root.exists() else []
+    return root / f"v{(max(ns) if ns else 0) + 1}"

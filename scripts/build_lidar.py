@@ -30,6 +30,7 @@ from groundtruth import config  # noqa: E402
 EPT = "https://s3-us-west-2.amazonaws.com/usgs-lidar-public/USGS_LPC_NC_Phase4_Mecklenburg_2016_LAS_2019/"
 NOISE = {7, 18}
 RES = 1.0
+OUT_ROOT = config.next_data_dir("lidar")  # rebuilds go to a NEW version (data/lidar/vN/), never the one in use
 
 
 def hierarchy(c: httpx.Client, root: list[float] | None = None, q: tuple | None = None) -> dict[str, int]:
@@ -124,7 +125,7 @@ def build(place: str, bbox: list[float], max_depth: int, log=print) -> dict:
     have_s = np.isfinite(dsm)
     dsm_f = np.where(have_s, dsm, dtm_f)
     ndsm = np.clip(dsm_f - dtm_f, 0, None).astype(np.float32)
-    out = config.DATA / "lidar" / place.replace(" ", "_")
+    out = OUT_ROOT / place.replace(" ", "_")
     out.mkdir(parents=True, exist_ok=True)
     prof = {"driver": "GTiff", "height": H, "width": W, "count": 1, "dtype": "float32", "crs": "EPSG:32617",
             "transform": from_origin(gx0, gy1, RES, RES), "compress": "deflate", "tiled": True, "nodata": -9999.0}

@@ -21,6 +21,6 @@ setsid nohup nice -n 5 uvicorn api.app:app --host "$HOST" --port "$PORT" --worke
   >> data/logs/api.log 2>&1 < /dev/null &
 echo $! > "$PIDF"
 for i in $(seq 40); do curl -sf "http://127.0.0.1:$PORT/api/v1/health" >/dev/null && break; sleep 0.5; done
-# wait for the warm-up (models + index + pick/find_all/refine) before reporting healthy (max ~3 min)
-for i in $(seq 180); do curl -s "http://127.0.0.1:$PORT/api/v1/health" | grep -q '"ok":true' && break; sleep 1; done
+# wait for the warm-up (models + index + hero flow + typed demo chain) before reporting healthy (max ~15 min)
+for i in $(seq 900); do curl -s "http://127.0.0.1:$PORT/api/v1/health" | grep -q '"ok":true' && break; sleep 1; done
 echo "api started (pid $(cat "$PIDF")) → $(curl -s "http://127.0.0.1:$PORT/api/v1/health" | head -c 300)"

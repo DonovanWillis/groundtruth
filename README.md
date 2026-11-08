@@ -29,6 +29,15 @@ bash scripts/run_label_server.sh          # → http://localhost:8765/label
 pytest -q
 ```
 
+### The demo (PC, WSL)
+```bash
+bash scripts/restart_and_warm.sh   # API + UI on http://127.0.0.1:8000/ (healthy after ~2 min of warm-up)
+bash scripts/demo_check.sh         # manifest + hero flow + typed chain + latency budgets → RESULT: PASS
+bash scripts/rollback_demo.sh      # back to the frozen demo-final (code + data versions), then demo_check
+```
+Start with **`docs/HANDOFF.md`** (what it does, how to run the PC + laptop stack, numbers, weaknesses) and
+`docs/DEMO_DAY.md` (tailnet access, fallbacks). Upgrades happen on branches; `demo-final` is never modified.
+
 ### Labelling page
 Keys: `1`–`5` concept · `T` true match · `L` look-alike · `U` undo · `Shift`+click drops the other kind · `/` search.
 Each click is saved straight to `data/labels/` (append-only journal, atomic GeoJSON snapshot and a backup).

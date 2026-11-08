@@ -155,14 +155,15 @@ def parse(text: str) -> Plan:
             if re.search(rf"\b{re.escape(a)}\b", core) and (best is None or len(a) > len(best[1])):
                 best = (key, a)
     pc = _conf_pc()
-    bkind = next((k for k, v in pc["buildings"].items() if any(re.search(rf"\b{re.escape(w)}\b", core) for w in v["words"])),
-                 None)
+    # place categories / building kinds must be the WHOLE remaining phrase ("school bus lots" is not "school")
+    whole = re.sub(r"^(all |the |any |every )", "", core).strip(" ,")
+    bkind = next((k for k, v in pc["buildings"].items() if whole in v["words"]), None)
     if best and not (bkind and p.min_height_m is not None and best[0] == "warehouse"):
         p.target_kind, p.target, p.concept, p.concept_query = "concept", best[0], best[0], best[1]
         if best[0] == "warehouse" and p.min_height_m is not None:
             p.target_kind, p.target = "buildings", "warehouse"
         return p
-    cat = next((k for k, v in pc["categories"].items() if any(re.search(rf"\b{re.escape(w)}\b", core) for w in v["words"])), None)
+    cat = next((k for k, v in pc["categories"].items() if whole in v["words"]), None)
     if bkind:
         p.target_kind, p.target = "buildings", bkind
     elif cat:
@@ -174,12 +175,58 @@ def parse(text: str) -> Plan:
     return p
 
 
-def run(engine_for, text: str) -> dict[str, Any]:
-    """engine_for(year) → Engine. Returns {planner, plan, steps:[{ref, tool, envelope}], actions:[...], status}."""
+_CACHE: "OrderedDict[str, dict[str, Any]]" = None  # type: ignore[assignment]
+EXPORT_RE = re.compile(r"^\s*(?:please\s+)?(?:export|download|save)\b(?:.*?\b(csv|geojson|pdf)\b)?", re.I)
+MAX_INTERMEDIATE_FEATURES = 500
+
+
+def run(engine_for, text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    """engine_for(year) → Engine. ``context`` (from the UI): {place: the place on screen, last_text: the previous
+    request}; a request without a place uses context.place, and "export them as CSV" exports the last request's result.
+    Deterministic, so results are cached per (text, context) (GROUNDTRUTH_PLANNER_CACHE entries, default 64).
+    Returns {planner, plan, steps:[{ref, tool, envelope}], actions:[...], status, cached}."""
+    import copy
+    import os
+    from collections import OrderedDict
+
+    global _CACHE
+    if _CACHE is None:
+        _CACHE = OrderedDict()
+    context = {k: v for k, v in (context or {}).items() if v}
+    key = json.dumps([text.strip().lower(), context], sort_keys=True)
+    if key in _CACHE:
+        _CACHE.move_to_end(key)
+        out = copy.deepcopy(_CACHE[key])
+        out["cached"] = True
+        return out
+    out = _run(engine_for, text, context)
+    if out["status"] in ("ok", "declined"):
+        _CACHE[key] = copy.deepcopy(out)
+        while len(_CACHE) > int(os.environ.get("GROUNDTRUTH_PLANNER_CACHE", "64")):
+            _CACHE.popitem(last=False)
+    out["cached"] = False
+    return out
+
+
+def _slim(steps: list[dict[str, Any]], keep_refs: set[str]) -> None:
+    """Big intermediate feature sets are left out of the response (never silently: metrics.features_omitted)."""
+    for s in steps:
+        res = s["envelope"].get("result") or {}
+        fc = res.get("geojson") or {}
+        n = len(fc.get("features", []))
+        if s["ref"] not in keep_refs and n > MAX_INTERMEDIATE_FEATURES:
+            fc["features"] = []
+            res.setdefault("metrics", {})["features_omitted"] = n
+            s["envelope"].setdefault("limits", []).append(
+                f"{n} features omitted from this intermediate step in the agent response; the final step carries the set")
+
+
+def _run(engine_for, text: str, context: dict[str, Any]) -> dict[str, Any]:
     plan = parse(text)
     steps: list[dict[str, Any]] = []
     actions: list[dict[str, Any]] = []
     extra: dict[str, Any] = {}
+    keep: set[str] = set()
 
     def step(tool: str, env) -> str:
         ref = f"step_{len(steps) + 1}"
@@ -187,12 +234,40 @@ def run(engine_for, text: str) -> dict[str, Any]:
         return ref
 
     def done(status: str) -> dict[str, Any]:
+        _slim(steps, keep)
         return {"plan": {**asdict(plan), **extra}, "steps": steps, "actions": actions, "status": status, "planner": PLANNER}
 
     if _people(text):
         actions.append({"action": "say", "text": "I can't help with information about people (owners, residents, "
                                                  "demographics, crime or school ratings). Ask about things visible from above."})
         return done("declined")
+    ex_m = EXPORT_RE.search(text)
+    if ex_m and not plan.target_kind or (ex_m and re.search(r"\b(them|these|those|it|results?|this)\b", text, re.I)):
+        last = context.get("last_text")
+        if not last:
+            actions.append({"action": "say", "text": "Export what? Run a search first, then say 'export them as CSV'."})
+            return done("declined")
+        prev = run(engine_for, last, {k: v for k, v in context.items() if k != "last_text"})
+        cur_ref = prev.get("current_ref")
+        cur = next((s for s in prev["steps"] if s["ref"] == cur_ref), None)
+        if prev["status"] != "ok" or cur is None:
+            actions.append({"action": "say", "text": f"Nothing to export from '{last}'."})
+            return done("declined")
+        fmt = (ex_m.group(1) or "csv").lower()
+        eng = engine_for(None)
+        geo = cur["envelope"]["result"]["geojson"]
+        ex_env = eng.export(geo, fmt)
+        r = step("export", ex_env)
+        keep.add(r)
+        extra["exported_from"] = last
+        actions.append({"action": "offer_download", "envelope_ref": r, "format": fmt})
+        actions.append({"action": "say", "text": f"Exported {ex_env.result.metrics.get('count')} results of '{last}' as "
+                                                 f"{fmt.upper()} ({r})."})
+        return {**done("ok"), "current_ref": r}
+    if plan.place is None and context.get("place") and plan.target_kind and plan.target_kind != "canopy" \
+            and not plan.minutes:  # travel-time requests define their own area
+        plan.place = context["place"]
+        plan.notes.append(f"place '{plan.place}' taken from the map (context)")
     if not plan.target_kind:
         actions.append({"action": "say", "text": "I didn't recognise what to look for. Try: swimming pools, parking lots, "
                                                  "solar panels, schools, houses, tennis courts (optionally 'in <place>')."})
@@ -361,4 +436,5 @@ def run(engine_for, text: str) -> dict[str, Any]:
             parts.append(f"{mm.get('new', 0)} new since {plan.new_since}, {mm.get('existing', 0)} existing, "
                          f"{mm.get('unsure', 0)} unsure ({r_cy})")
     actions.append({"action": "say", "text": "; ".join(parts) + "."})
-    return done("ok")
+    keep.add(r_cur)
+    return {**done("ok"), "current_ref": r_cur}

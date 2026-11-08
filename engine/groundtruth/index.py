@@ -9,6 +9,7 @@ CLIP views are [whole, NW, NE, SW, SE].
 from __future__ import annotations
 
 import json
+import os
 from functools import cached_property
 from pathlib import Path
 from typing import Any, Iterable
@@ -99,10 +100,51 @@ class ChipIndex:
         return self._faiss("clip")
 
     def search_rows(self, kind: str, q: np.ndarray, k_rows: int) -> tuple[np.ndarray, np.ndarray]:
+        if kind == "dino" and os.environ.get("GROUNDTRUTH_DINO_SEARCH", "numpy") == "numpy":
+            return self._scan_dino(q, k_rows)
         idx = self.dino_index if kind == "dino" else self.clip_index
         k_rows = int(min(k_rows, idx.ntotal))
         D, I = idx.search(np.ascontiguousarray(q, dtype=np.float32).reshape(1, -1), k_rows)
         return D[0], I[0]
+
+    def _scan_dino(self, q: np.ndarray, k_rows: int, chunk: int = 2048) -> tuple[np.ndarray, np.ndarray]:
+        """Exact inner-product top-k over the memory-mapped cell vectors (rows = chip × cell), chunked. Replaces the
+        in-RAM FAISS copy of the same 2.6 GB (the flat FAISS index scanned everything too); pages stay in the
+        reclaimable page cache and are released after use (``release_pages``)."""
+        q = np.ascontiguousarray(q, dtype=np.float32).reshape(-1)
+        n, c = self.dino.shape[0], self.dino.shape[1]
+        k_rows = int(min(k_rows, n * c))
+        best_s = np.empty(0, np.float32)
+        best_i = np.empty(0, np.int64)
+        for s in range(0, n, chunk):
+            x = np.asarray(self.dino[s:s + chunk], dtype=np.float32).reshape(-1, q.shape[0])
+            sc = x @ q
+            kk = min(k_rows, len(sc))
+            top = np.argpartition(-sc, kk - 1)[:kk]
+            best_s = np.concatenate([best_s, sc[top]])
+            best_i = np.concatenate([best_i, top.astype(np.int64) + s * c])
+            if len(best_s) > 4 * k_rows:
+                keep = np.argpartition(-best_s, k_rows - 1)[:k_rows]
+                best_s, best_i = best_s[keep], best_i[keep]
+        order = np.lexsort((best_i, -best_s))[:k_rows]  # deterministic: score desc, then row id
+        self.release_pages()
+        return best_s[order], best_i[order]
+
+    def release_pages(self) -> None:
+        """Drop this index's file pages from the page cache (posix_fadvise DONTNEED: no root needed), so a big scan
+        doesn't keep ~2.6 GB of the WSL VM's memory away from Windows."""
+        for name in ("dino.npy", "clip.npy", "thumbs.bin"):
+            p = self.root / name
+            if not p.exists():
+                continue
+            try:
+                fd = os.open(p, os.O_RDONLY)
+                try:
+                    os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+                finally:
+                    os.close(fd)
+            except (OSError, AttributeError):
+                pass
 
     # ---------- geometry ----------
     def cell_bounds_m(self, i: int, cell: int) -> tuple[float, float, float, float]:
