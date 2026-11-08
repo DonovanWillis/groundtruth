@@ -65,3 +65,18 @@ def test_phase6_phrases_parse():
 def test_open_vocabulary_on_place():
     p = parse("boat docks on Lake Norman")
     assert (p.target_kind, p.target, p.place) == ("open", "boat docks", "Lake Norman")
+
+
+def test_derived_chain_parse():
+    p = parse("houses with pools")
+    assert (p.target_kind, p.target, p.place) == ("derived", "house_with_pool", None)
+    p = parse("houses with pools in Lake Norman")
+    assert (p.target_kind, p.place) == ("derived", "Lake Norman")
+    p = parse("houses with pools in Lake Norman with lake and dock access")
+    assert (p.target_kind, p.place, sorted(p.require)) == ("derived", "Lake Norman", ["has_dock", "lakefront"])
+    p = parse("houses with pools in Lake Norman with lake and dock access which have docks added since 2020")
+    assert p.docks_new_since == 2020
+    p = parse("houses with pools in Lake Norman with lake and dock access show the biggest ones")
+    assert p.sort == "pool_area"
+    p = parse("with lake and dock access")
+    assert p.target_kind is None and "has_dock" in p.require

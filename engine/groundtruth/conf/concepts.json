@@ -13,7 +13,7 @@
                "soft_neg_weight": 0.25},
     "dense": {"auto": true, "disabled_places": ["Uptown"], "_disabled_doc": "Uptown dense additions were ~7/50 right by eye (tall-building shadows/roof edges; data/out/shadow_Uptown_additions.png), so dense is off there", "shadow": {"enabled": false, "v_max": 110, "tall_m": 8, "radius_m": 30, "_doc": "A/B 2026-11-08: removes 2 of 112 (Ballantyne) and 1 of 52 (Uptown) dense objects, < 3/50 gain: kept off"}, "require_patch_colour": false, "sim_min": 0.35, "object_check": {"compactness_min": 0.2, "colour_frac_min": 0.3}, "_doc": "Dense proposals are concept-colour blobs that passed the object check; at query time they only need DINOv2 similarity ≥ sim_min and to be closer to the picked examples than to the not-this negatives."},
     "object_check": {"area_m2": [10, 2000], "compactness_min": 0.3, "colour_frac_min": 0.5, "colour_area_min_m2": 6,
-                     "max_height_m": 1.5,
+                     "max_height_m": 1.5, "max_building_overlap": 0.5,
                      "outline_by_colour": true,
                      "_doc": "SAM outlines of pools often include the deck/yard, so with outline_by_colour the final outline = SAM mask ∩ pool-cyan pixels (dilated 1 px), the connected piece at the prompt. Area range, compactness and colour fraction are checked on that refined outline."}
   },
