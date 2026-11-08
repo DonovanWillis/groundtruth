@@ -1,4 +1,4 @@
-# Groundtruth API contract — v0.3.1
+# Groundtruth API contract — v0.4
 
 Every tool, whether an engine function, an HTTP route or an agent action, returns **one envelope**. Implementation:
 `engine/groundtruth/envelope.py` (pydantic, validated). Example responses for every tool: `docs/fixtures/<tool>.json`.
@@ -81,7 +81,36 @@ built, otherwise the largest indexed slice).
 - `confidence` is `null` for the search tools. Calibrated probabilities are planned once labels exist.
 - `aoi`: `"county"` appears when the full-county index lands. Until then only slices (`unc_charlotte`, `south_charlotte`).
 
+## v0.4 semantics (read this first)
+- **One counting unit.** `find_all`, `refine` (with `candidates`), `filter` and `export` all count *deduped objects that
+  were not rejected by the object check*. `features` is exactly that set, so `len(features) == metrics.count_detected`, and
+  filter output ≤ its input (asserted in `tests/test_counts.py` and `scripts/demo_check.sh`).
+- **Ids** can carry a patch: `chip_id#cell:patch` (patch 0–255 = 14 px / 8.4 m). Use the `example` field as given.
+- **`find_all` with `place`/`bbox` is an exhaustive scan.** Every chip and every 16.8 m cell in the box is scored. Every
+  object above the concept threshold (`conf/concepts.json` → `detect`) is counted, with negatives = the `exclude` ids
+  (send the unpicked senses). Metrics add `mode: "exhaustive_scan"`, `chips_in_box`, `cells_scanned`,
+  `chips_prefiltered`, `raw_detections`, `outlined`, `pending_outline`, `rejected_by_object_check`, `count_unit`.
+  Without a place/bbox it is `mode: "ranked_top_k"` (not exhaustive; said in `limits`).
+- **Object check** (after SAM): area range, compactness and concept-colour fraction (`conf/concepts.json` → `object_check`).
+  For pools the outline is refined to SAM mask ∩ pool-cyan pixels, so `area_m2` is the water area (`sam_area_m2` keeps
+  the raw SAM area). Rejected objects drop out of every count. Features carry `object_check {pass, reason, …}`.
+- **`outline`** gains `concept` (applies the object check; `metrics.rejected` lists ids to drop) and accepts patch ids.
+- **`refine`** gains `candidates` (the find_all object ids). It then re-scores exactly those objects: accepted → kept,
+  rejected → removed, others counted when P ≥ 0.5. Features carry `confidence` (= P) and `why`.
+- **`pick_candidates`**: colour senses must show their colour; otherwise the tile is
+  `{no_clear_example: true, reason, geometry: null}`. Tiles carry `cell_colour` and `confidence`.
+- **Every envelope states `confidence`** (per-tool heuristics, explained in `method`).
+- **`GET /health`** adds `warming` and `warmup {ms, error, place}`. `ok` stays false until the warm-up has run pick +
+  find_all + refine.
+- **`POST /api/v1/agent/run {text}`**: the deterministic **rules planner** (no LLM). It returns
+  `{planner, plan, status, steps: [{ref: "step_N", tool, envelope}], actions: [map actions]}` using the map-action schema
+  (`fly_to`, `show_candidates`, `add_results`, `add_layer`, `set_filter`, `show_metrics`, `offer_download`, `say`).
+  People-data requests are declined.
+
 ## Changelog
+- **v0.4 (2026-11-07)**: semantics above. **Breaking:** `find_all.features` now holds only counted objects (it used to
+  hold top-k candidates plus a separate `count_detected`). New: exhaustive place scan, object check, patch ids, `refine.candidates`,
+  `outline.concept`, `no_clear_example`, confidence everywhere, warm-up health, `/agent/run`.
 - **v0.3.1 (2026-11-07)**: additive only.
   - `outline` gains `cached_only: bool` (returns cached outlines plus `metrics.pending`, never runs SAM; for polling), and its
     default `max` is now 24.

@@ -184,8 +184,8 @@
     "score_max": 0.3032
    }
   },
-  "confidence": null,
-  "method": "OpenCLIP ViT-B-16 (laion2b_s34b_b88k) text\u2192image cosine, max over whole chip + 2\u00d72 quadrant crops, NAIP 2022; hit cell = most salient DINOv2 cell in the best view",
+  "confidence": 0.384,
+  "method": "OpenCLIP ViT-B-16 (laion2b_s34b_b88k) text\u2192image cosine, max over whole chip + 2\u00d72 quadrant crops, NAIP 2022; hit cell = most salient DINOv2 cell in the best view; confidence = mean relative score within this result (heuristic)",
   "assumptions": [
    "NAIP 2022 imagery reflects the ground today"
   ],
@@ -207,22 +207,22 @@
    {
     "phase": "embed_query",
     "detail": "OpenCLIP text, 4-prompt ensemble",
-    "ms": 5182.58
+    "ms": 5214.34
    },
    {
     "phase": "search",
     "detail": "max over 1 CLIP views \u00d7 272 chips",
-    "ms": 31.31
+    "ms": 27.43
    },
    {
     "phase": "localise+dedupe",
     "detail": "salient DINOv2 cell in best view; cell NMS",
-    "ms": 20.64
+    "ms": 43.55
    }
   ],
   "declined_reason": null,
   "_fixture": {
-   "truncated_features": 0
+   "truncated_features": 9
   }
  }
 }
