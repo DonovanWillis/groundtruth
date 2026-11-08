@@ -702,7 +702,7 @@ class Engine:
 
     def find_all(self, examples: Sequence[str], exclude: Sequence[str] = (), k: int = 200,
                  bbox: Sequence[float] | None = None, place: str | None = None, concept: str | None = None,
-                 rerank: bool = True, outline_top: int = 300) -> Envelope:
+                 rerank: bool = True, outline_top: int = 300, within_layer: str | None = None) -> Envelope:
         """The count. With a place/bbox: EXHAUSTIVE scan of every chip and cell in the box (scan.py): every object above
         the concept threshold, deduped across chip borders, negatives ("not this") applied; outlines for the top
         ``outline_top`` are queued (SAM 2, patch-prompted) and every cached outline passes an object check (area,
@@ -716,6 +716,13 @@ class Engine:
             bbox = self.place_bbox(place)
             if bbox is None:
                 return declined(tool, VERSION, f"unknown place {place!r} (see GET /api/v1/places)")
+        if within_layer:
+            try:
+                rows = self._layer_rows(within_layer, bbox)
+            except KeyError as e:
+                return declined(tool, VERSION, str(e))
+            return self._find_all_scan(examples, exclude, bbox, place, concept, outline_top, rows=rows,
+                                       scope=f"chips covering layer '{within_layer}'")
         if bbox:
             return self._find_all_scan(examples, exclude, bbox, place, concept, outline_top)
         self.__dict__["_busy"] = self.__dict__.get("_busy", 0) + 1
@@ -782,8 +789,27 @@ class Engine:
                 "bbox": list(bbox) if bbox else None, "place": place, "concept": concept,
                 "count_unit": "deduped objects not rejected by the object check (same unit as features)"}
 
-    def _find_all_scan(self, examples: Sequence[str], exclude: Sequence[str], bbox: Sequence[float],
-                       place: str | None, concept: str | None, outline_top: int) -> Envelope:
+    def _layer_rows(self, layer: str, bbox: Sequence[float] | None = None) -> np.ndarray:
+        """Chip rows whose footprint intersects any feature of a layer (optionally within a bbox)."""
+        from shapely.strtree import STRtree
+
+        fc = self.provider.get_layer(layer, tuple(bbox) if bbox else None)
+        geoms = [shape(f["geometry"]) for f in fc["features"] if f.get("geometry")]
+        if not geoms:
+            return np.zeros(0, dtype=int)
+        tree = STRtree(geoms)
+        m = self.index.meta
+        cand = self._bbox_rows(bbox) if bbox else np.arange(len(self.index))
+        lb = np.array([g.bounds for g in geoms])
+        w, s, e, n = lb[:, 0].min(), lb[:, 1].min(), lb[:, 2].max(), lb[:, 3].max()
+        cand = cand[(m["east"][cand] >= w) & (m["west"][cand] <= e) & (m["north"][cand] >= s) & (m["south"][cand] <= n)]
+        keep = [int(i) for i in cand if len(tree.query(box(m["west"][i], m["south"][i], m["east"][i], m["north"][i]),
+                                                      predicate="intersects"))]
+        return np.array(keep, dtype=int)
+
+    def _find_all_scan(self, examples: Sequence[str], exclude: Sequence[str], bbox: Sequence[float] | None,
+                       place: str | None, concept: str | None, outline_top: int, rows: np.ndarray | None = None,
+                       scope: str | None = None) -> Envelope:
         from groundtruth.scan import scan
 
         tool = "find_all"
@@ -791,11 +817,13 @@ class Engine:
         if not pos:
             return declined(tool, VERSION, "none of the example ids are in the index")
         neg = self._example_cells(exclude)
-        rows = self._bbox_rows(bbox)
+        if rows is None:
+            rows = self._bbox_rows(bbox)
+        scope = scope or "the box"
         t = StepTimer()
         self.__dict__["_busy"] = self.__dict__.get("_busy", 0) + 1
         try:
-            with t.step("scan", f"every chip + cell in the box ({len(rows)} chips, {len(rows) * self.index.n_cells} cells)") as st:
+            with t.step("scan", f"every chip + cell in {scope} ({len(rows)} chips, {len(rows) * self.index.n_cells} cells)") as st:
                 dets, info = scan(self, pos, neg, rows, concept)
                 st.detail += (f" → {info.get('chips_prefiltered', 0)} chips at full resolution ({info.get('device', '-')}) → "
                               f"{info.get('raw_detections', 0)} raw → {info.get('objects', 0)} objects after dedupe")
@@ -824,7 +852,7 @@ class Engine:
         metrics = self._object_metrics(out, rejected, n_queued, bbox, place, concept)
         metrics.update(mode="exhaustive_scan", **{k: v for k, v in info.items() if k != "device"}, device=info.get("device"))
         limits = self._limits() + [
-            f"Exhaustive within the box: all {info['chips_in_box']} chips / {info['cells_scanned']} cells scored; objects "
+            f"Exhaustive within {scope}: all {info['chips_in_box']} chips / {info['cells_scanned']} cells scored; objects "
             "below the concept threshold (conf/concepts.json) are not counted",
             "count = deduped objects (merged within the concept's nms_m) that did not fail the object check; "
             "objects not yet outlined are counted on their image evidence and may still be rejected once outlined",

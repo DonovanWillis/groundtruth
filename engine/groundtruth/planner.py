@@ -123,7 +123,8 @@ def run(engine_for, text: str) -> dict[str, Any]:
     ex = chosen["properties"]["example"]
     neg = [f["properties"]["example"] for f in tiles if f is not chosen]
     # 2. find all (exhaustive in a place; ranked county-wide otherwise)
-    fa = eng.find_all([ex], neg, place=plan.place if eng.aoi == "county" else None, concept=plan.concept)
+    fa = eng.find_all([ex], neg, place=plan.place if eng.aoi == "county" else None, concept=plan.concept,
+                      within_layer=plan.host_layer)  # "solar on warehouses": scan exactly the chips covering warehouses
     r_fa = step("find_all", fa)
     actions.append({"action": "add_results", "layer_id": "results", "envelope_ref": r_fa})
     current, r_cur = fa.result.geojson, r_fa
@@ -158,7 +159,10 @@ def run(engine_for, text: str) -> dict[str, Any]:
         actions.append({"action": "offer_download", "envelope_ref": r_ex, "format": "csv"})
     n = len(current["features"])
     what = (plan.concept_query or plan.concept).replace("_", " ")
-    parts = [f"{n} {what} detected" + (f" in {plan.place}" if plan.place else " (county-wide, ranked top results)") + f" ({r_cur})"]
+    scope = (f" in {plan.place}" if plan.place
+             else f" on {plan.host_layer.replace('osm_', '')} (every chip touching one scanned)" if plan.host_layer
+             else " (county-wide, ranked top results: not an exhaustive count; add 'in <place>' for one)")
+    parts = [f"{n} {what} detected{scope} ({r_cur})"]
     if r_ms and ms.status != "declined":
         parts.append(f"{ms.result.metrics.get('area_acres_total')} acres in total ({r_ms})")
     if r_cy:

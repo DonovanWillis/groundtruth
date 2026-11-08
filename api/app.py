@@ -113,7 +113,8 @@ class FindAllIn(Common):
     place: str | None = None
     concept: str | None = None
     rerank: bool = True
-    outline_top: int = Field(200, ge=0, le=500)
+    outline_top: int = Field(300, ge=0, le=500)
+    within_layer: str | None = None
 
 
 class RefineIn(Common):
@@ -299,7 +300,8 @@ def t_find_similar(b: FindSimilarIn) -> JSONResponse:
 @app.post("/api/v1/tools/find_all")
 def t_find_all(b: FindAllIn) -> JSONResponse:
     return _env(eng(b.aoi, b.year).find_all(b.examples, b.exclude, k=b.k, bbox=b.bbox, place=b.place,
-                                            concept=b.concept, rerank=b.rerank, outline_top=b.outline_top))
+                                            concept=b.concept, rerank=b.rerank, outline_top=b.outline_top,
+                                            within_layer=b.within_layer))
 
 
 @app.post("/api/v1/tools/compare_years")
