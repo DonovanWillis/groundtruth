@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { thumb } from "./api";
 import type { Bbox, Feature, Health } from "./api";
-import { AGENT_DEMO_PROMPT, DEFAULT_PLACES, EXAMPLE_QUERIES, matchPlace, parseQuery, pretty } from "./config";
+import { AGENT_DEMO_PROMPT, DEFAULT_PLACES, EXAMPLE_QUERIES, LANDING_CHIPS, matchPlace, parseQuery, pretty } from "./config";
 
 /** Chip thumbnail with the matching 16.8 m cell outlined. */
 export function CellThumb({ f, size, big }: { f: Feature; size?: number; big?: boolean }) {
@@ -44,7 +44,10 @@ export function AskScreen(p: {
         {p.busy && <div className="hint parsed"><span className="spin" /> {p.busy}</div>}
         {p.err && <div className="err parsed">{p.err}</div>}
         <div className="chips">
-          {EXAMPLE_QUERIES.map((q) => <button key={q} className="chip" onClick={() => { p.setQuery(q); p.onAsk(q); }}>{q}</button>)}
+          {LANDING_CHIPS.map((q) => <button key={q} className="chip" onClick={() => p.onAgent(q)}>{q}</button>)}
+        </div>
+        <div className="chips">
+          {EXAMPLE_QUERIES.map((q) => <button key={q} className="chip ghost" onClick={() => { p.setQuery(q); p.onAsk(q); }}>pick: {q}</button>)}
         </div>
 
         <div className="hood">

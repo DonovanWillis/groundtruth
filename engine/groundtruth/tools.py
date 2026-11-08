@@ -12,8 +12,10 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -95,6 +97,50 @@ def _iou(a: tuple[float, ...], b: tuple[float, ...]) -> float:
     return inter / ua
 
 
+def memo(complete: Any = None):
+    """Memoise a deterministic tool's envelope per engine (args + concept config as the key; GROUNDTRUTH_MEMO entries,
+    default 256). ``complete(env)`` decides whether a result is final enough to cache (e.g. every outline done).
+    A cached reply says so in its steps; callers get a deep copy."""
+    import functools
+
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(self, *a, **kw):
+            from groundtruth.rerank import concept_conf
+
+            cache = self.__dict__.setdefault("_memo", OrderedDict())
+            ck = kw.get("concept")
+            key = (fn.__name__, json.dumps([a, kw], sort_keys=True, default=str),
+                   json.dumps(concept_conf(ck), sort_keys=True) if ck else None)
+            if key in cache:
+                cache.move_to_end(key)
+                from groundtruth.envelope import Step
+
+                t0 = time.perf_counter()
+                env = cache[key].model_copy(deep=True)
+                orig = round(sum(s.ms for s in env.steps))
+                env.steps = [Step(phase="memo", detail=f"identical request: cached envelope (first computed in {orig} ms: "
+                                                       + ", ".join(s.phase for s in env.steps) + ")",
+                                  ms=round((time.perf_counter() - t0) * 1000, 1))]
+                return env
+            env = fn(self, *a, **kw)
+            if env.status != "declined" and (complete is None or complete(env)):
+                cache[key] = env.model_copy(deep=True)
+                while len(cache) > int(os.environ.get("GROUNDTRUTH_MEMO", "256")):
+                    cache.popitem(last=False)
+            return env
+
+        return wrapper
+
+    return deco
+
+
+def _all_outlined(env: Envelope) -> bool:
+    """Final when nothing is pending, or when this call queued no new outlines (objects beyond outline_top stay boxes)."""
+    m = env.result.metrics
+    return not m.get("pending_outline") or not m.get("outlines_queued")
+
+
 @dataclass
 class Session:
     id: str
@@ -143,6 +189,14 @@ class Engine:
         kw.setdefault("status", self._status())
         kw.setdefault("limits", self._limits())
         kw.setdefault("sources", self._sources())
+        res = kw.get("result")
+        concept = res.metrics.get("concept") if res is not None and isinstance(res.metrics, dict) else None
+        if concept:
+            from groundtruth.rerank import concept_conf
+
+            exp = concept_conf(concept).get("experimental")
+            if exp:
+                kw["limits"] = list(kw["limits"]) + [f"EXPERIMENTAL concept '{concept}': {exp}"]
         if kw.get("confidence") is None:  # every envelope states a confidence (heuristic where that's all we have)
             feats = (kw.get("result").geojson.get("features", []) if kw.get("result") is not None else [])
             cs = [f["properties"].get("confidence") for f in feats if f.get("properties", {}).get("confidence") is not None]
@@ -290,6 +344,7 @@ class Engine:
             assumptions=[f"NAIP {self.year} imagery reflects the ground today"], steps=t.steps)
 
     # ------------------------------------------------------------------ pick_candidates
+    @memo()
     def pick_candidates(self, query: str, n: int = 6, pool: int = 200, per_sense: int = 40,
                         max_sim: float = 0.80) -> Envelope:
         """One representative per *meaning*: the query is expanded into sense prompts (conf/senses.json); each
@@ -703,6 +758,7 @@ class Engine:
         f["id"] = ex_id
         return f, chk
 
+    @memo(_all_outlined)
     def find_all(self, examples: Sequence[str], exclude: Sequence[str] = (), k: int = 200,
                  bbox: Sequence[float] | None = None, place: str | None = None, concept: str | None = None,
                  rerank: bool = True, outline_top: int = 300, within_layer: str | None = None) -> Envelope:
@@ -827,7 +883,22 @@ class Engine:
         self.__dict__["_busy"] = self.__dict__.get("_busy", 0) + 1
         try:
             with t.step("scan", f"every chip + cell in {scope} ({len(rows)} chips, {len(rows) * self.index.n_cells} cells)") as st:
-                dets, info = scan(self, pos, neg, rows, concept)
+                # scan results are deterministic for (examples, negatives, chips, concept config): cache them so the
+                # warm-up makes every demo place instant (GROUNDTRUTH_SCAN_CACHE entries, default 64)
+                cache = self.__dict__.setdefault("_scan_cache", OrderedDict())
+                from groundtruth.rerank import concept_conf as _cc
+
+                key = (tuple(pos), tuple(neg), hash(np.asarray(rows).tobytes()), concept,
+                       json.dumps(_cc(concept), sort_keys=True))
+                if key in cache:
+                    cache.move_to_end(key)
+                    dets, info = cache[key]
+                    st.detail += " (cached scan)"
+                else:
+                    dets, info = scan(self, pos, neg, rows, concept)
+                    cache[key] = (dets, info)
+                    while len(cache) > int(os.environ.get("GROUNDTRUTH_SCAN_CACHE", "64")):
+                        cache.popitem(last=False)
                 st.detail += (f" → {info.get('chips_prefiltered', 0)} chips at full resolution ({info.get('device', '-')}) → "
                               f"{info.get('raw_detections', 0)} raw → {info.get('objects', 0)} objects after dedupe")
         finally:
@@ -870,6 +941,7 @@ class Engine:
                          limits=limits, steps=t.steps)
 
     # ------------------------------------------------------------------ compare_years (search across time)
+    @memo()
     def compare_years(self, examples: Sequence[str], from_year: int = 2020, concept: str | None = None) -> Envelope:
         """For each result (``chip#cell`` in this engine's year), look at the same cell in ``from_year``: DINOv2 cell
         similarity across years + concept colour fraction then vs now → change = new | existing | unsure."""
@@ -1224,6 +1296,7 @@ class Engine:
                              {"osm": "openstreetmap"}.get(l.split("_")[0], l.split("_")[0])))], steps=t.steps)
 
     # ------------------------------------------------------------------ layers
+    @memo()
     def add_layer(self, name: str, bbox: Sequence[float] | None = None) -> Envelope:
         tool = "add_layer"
         try:

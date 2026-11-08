@@ -212,6 +212,17 @@ def _warmup() -> None:
             if hits:
                 e.refine(None, [ex, hits[0]["properties"]["example"]], [hits[-1]["properties"]["example"]], k=50,
                          concept="swimming_pool", candidates=[h["properties"]["example"] for h in hits])
+            WARM["core_ms"] = round((_t.perf_counter() - t0) * 1000)
+            WARM["done"] = True  # healthy once the hero flow is warm; the rest warms in the background
+            if e.aoi == "county" and os.environ.get("GROUNDTRUTH_WARMUP_PLACES", "1") == "1":
+                from groundtruth.planner import run as plan_run
+
+                for pl in json.loads((config.SENSES_PATH.parent / "places.json").read_text())["places"]:
+                    e.find_all([ex], neg, place=pl, concept="swimming_pool")
+                for chip in ("find swimming pools", "pools within 1 km of I-485 in Ballantyne",
+                             "pools in flood zones in Matthews", "new pools since 2020 in Ballantyne"):
+                    plan_run(lambda year: eng(None, year), chip)
+                WARM["places_ms"] = round((_t.perf_counter() - t0) * 1000)
         except Exception as err:  # never block health forever; report it
             WARM["error"] = f"{type(err).__name__}: {err}"[:300]
         finally:
@@ -237,7 +248,7 @@ def _env(e: Envelope) -> JSONResponse:
 # ---------------- meta ----------------
 @app.get("/api/v1/health")
 def health() -> dict[str, Any]:
-    return {"ok": bool(WARM["done"]), "warming": not WARM["done"], "warmup": {k: WARM[k] for k in ("ms", "error", "place")},
+    return {"ok": bool(WARM["done"]), "warming": not WARM["done"], "warmup": {k: WARM.get(k) for k in ("core_ms", "places_ms", "ms", "error", "place")},
             "contract": CONTRACT, "engine_version": VERSION, "indexes": available_indexes(),
             "primary_year": _provider.primary_year}
 

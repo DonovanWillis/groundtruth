@@ -2,10 +2,12 @@ import type { Bbox } from "./api";
 
 export const EXAMPLE_QUERIES = ["find swimming pools", "parking lots in Uptown", "solar on warehouses"];
 export const AGENT_DEMO_PROMPT = "pools within 1 km of I-485 in Ballantyne";
-export const AGENT_CHIPS = [
-  "find swimming pools", "pools within 1 km of I-485 in Ballantyne", "parking lots in Uptown", "solar on warehouses",
-  "pools in flood zones in Matthews",
+// Landing chips: the measured, demo-ready requests (each < 2 s warm). Solar/parking stay typeable but are experimental.
+export const LANDING_CHIPS = [
+  "find swimming pools", "pools within 1 km of I-485 in Ballantyne", "pools in flood zones in Matthews",
+  "new pools since 2020 in Ballantyne",
 ];
+export const AGENT_CHIPS = [...LANDING_CHIPS, "parking lots in Uptown (experimental)", "solar on warehouses (experimental)"];
 export const DEFAULT_PLACES = ["Ballantyne", "NoDa", "South End", "Myers Park", "Lake Norman", "University City", "Matthews", "Uptown"];
 
 export type LayerDef = { key: string; label: string; color: string; kind: "line" | "circle" | "fill"; bboxed?: boolean };

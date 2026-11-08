@@ -64,3 +64,47 @@ Every dataset and model Groundtruth uses. One-line summary per item for sign-off
 ### Places config
 `engine/groundtruth/conf/places.json`: neighbourhood bounding boxes resolved once via OSM Nominatim (ODbL, © OpenStreetMap
 contributors), clipped to the county. UNC Charlotte comes from the OSM campus outline.
+
+## Licence gate (2026-11-07)
+
+Full table, reasons and open decisions: [`LICENCE_GATE.md`](LICENCE_GATE.md). Items marked PASS there are cleared for
+use, but nothing below is in use yet unless it is listed above. Each item's attribution string:
+
+| item | licence | attribution string |
+|---|---|---|
+| GeoAI (`opengeos/geoai`, base package only, no extras) | MIT | "GeoAI © Qiusheng Wu, MIT License" |
+| GeoAI `BuildingFootprintExtractor` weights (`giswqs/geoai`, provisional) | MIT | "Building footprint model from GeoAI (giswqs/geoai), MIT License" |
+| segment-geospatial (core only) | MIT | "segment-geospatial © Qiusheng Wu, MIT License" |
+| SAM 1 / SAM 2 / SAM 2.1 weights | Apache-2.0 | "Segment Anything (SAM / SAM 2) © Meta Platforms, Inc., Apache License 2.0" |
+| Grounding DINO (`IDEA-Research/grounding-dino-tiny` / `-base`), pending D1 | Apache-2.0 | "Grounding DINO © IDEA Research, Apache License 2.0" |
+| Florence-2 (`microsoft/Florence-2-base` / `-large`), pending D1 | MIT | "Florence-2 © Microsoft Corporation, MIT License" |
+| Clay v1.5 (`made-with-clay/Clay`) | Apache-2.0 | "Clay Foundation Model v1.5, Apache License 2.0" |
+| TorchGeo (code) | MIT | "TorchGeo © Microsoft Corporation / TorchGeo contributors, MIT License" |
+| TorchGeo Tile2Vec NAIP weights | MIT | "Tile2Vec (Jean et al., 2019), MIT License" |
+| TiTiler / rio-tiler | MIT / BSD-3-Clause | "TiTiler © Development Seed (MIT); rio-tiler (BSD-3-Clause)" |
+| PDAL | BSD | "PDAL © Hobu, Inc., BSD License" |
+| USGS 3DEP lidar (`s3://usgs-lidar-public`, EPT) | US Government Public Domain | "Map services and data available from U.S. Geological Survey, National Geospatial Program." |
+| Valhalla / OSRM | MIT / BSD-2-Clause | "Valhalla contributors (MIT)" / "Project OSRM (BSD-2-Clause)" + "© OpenStreetMap contributors" on routes |
+| DuckDB + spatial (bundled GDAL, PROJ, GEOS (LGPL-2.1, D4)) | MIT | "DuckDB © DuckDB Foundation, MIT License" |
+| deck.gl | MIT | "deck.gl © vis.gl / OpenJS Foundation, MIT License" |
+| PMTiles / tippecanoe / Planetiler | BSD-3 / BSD-2-Clause / Apache-2.0 | "PMTiles © Protomaps (BSD-3)"; "tippecanoe (BSD-2-Clause)"; "Planetiler (Apache-2.0)" |
+| Martin | MIT OR Apache-2.0 | "Martin © MapLibre contributors" |
+| MCP Python SDK | MIT | "MCP Python SDK © Anthropic, PBC, MIT License" |
+| llama.cpp | MIT | "llama.cpp © The ggml authors, MIT License" |
+| Qwen3-4B / Qwen3-4B-Instruct-2507 (GGUF `Qwen/Qwen3-4B-GGUF` or `unsloth/Qwen3-4B-Instruct-2507-GGUF`) | Apache-2.0 | "Qwen3 © Alibaba Cloud (Qwen team), Apache License 2.0" |
+| Phi-3.5-mini / Phi-4-mini-instruct (fallback) | MIT | "Phi © Microsoft Corporation, MIT License" |
+| Mistral-7B-Instruct-v0.3 (alternative) | Apache-2.0 | "Mistral 7B © Mistral AI, Apache License 2.0" |
+| Overture places | CDLA-Permissive-2.0 / Apache-2.0 / CC0-1.0 per record | "Overture Maps Foundation, overturemaps.org" + "Data from [provider]" per record; Foursquare: "Copyright 2024 Foursquare Labs, Inc." + "transformed to the Overture schema" |
+| Overture buildings (ODbL; drop any Google Open Buildings records, D3) | ODbL 1.0 | "© OpenStreetMap contributors, Overture Maps Foundation" + listed building sources |
+| Geofabrik NC OSM extract | ODbL 1.0 | "© OpenStreetMap contributors" |
+
+**Not cleared:**
+- OWLv2: Google ban.
+- SAM 3 / 3.1: SAM License.
+- DINOv3, including SAT-493M and the copy in `giswqs/geoai`: DINOv3 License.
+- Qwen2.5-3B-Instruct: Qwen Research Licence.
+- Llama 3.x and Gemma: custom licences.
+- TorchGeo CC-BY-NC weights and OlmoEarth.
+- Unclear, pending a decision or verification:
+  - GeoAI solar, car and parking weights.
+  - Satlas NAIP (ODC-BY), DOFA (CC-BY-4.0 weights), Panopticon and ChesapeakeRSC.

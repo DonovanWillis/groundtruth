@@ -25,7 +25,7 @@ def test_people_requests_declined():
 
 
 def test_new_since_and_year():
-    p = parse("new pools since 2020 in NoDa")
-    assert p.new_since is None or p.new_since == 2020
+    p = parse("new pools since 2020 in Ballantyne")
+    assert (p.concept, p.place, p.new_since, p.year) == ("swimming_pool", "Ballantyne", 2020, None)
     p = parse("pools new since 2020 in NoDa")
     assert p.new_since == 2020 and p.place == "NoDa"

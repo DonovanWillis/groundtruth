@@ -75,7 +75,7 @@ def parse(text: str) -> Plan:
     hm = re.search(r"\bon (warehouses?)\b", t)
     if hm:
         p.host_layer = HOSTS[hm.group(1)]
-    ym = re.search(r"\bnew since (20\d\d)\b", t)
+    ym = re.search(r"\bnew\b.*?\bsince (20\d\d)\b", t)
     if ym:
         p.new_since = int(ym.group(1))
     yy = re.search(r"\bin (20\d\d)\b", t)
