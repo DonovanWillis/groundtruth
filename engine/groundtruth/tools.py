@@ -37,9 +37,15 @@ PEOPLE_TERMS = ("owner", "who owns", " owns ", "owned by", "who lives", "lives a
 NOT_IMPLEMENTED = "not_implemented"
 
 
+_PEOPLE_RE = __import__("re").compile(
+    r"\brat(e|es|ed|ing|ings)\b.*\bschools?\b|\bschools?\b.*\brat(e|es|ed|ing|ings)\b|\bbest schools?\b|"
+    r"\bworst schools?\b|\bschool (scores?|quality|rankings?)\b|\bpeople\b|\bwho (lives?|owns?|is|are)\b|\bhousehold\b")
+
+
 def _people(query: str) -> bool:
+    """People-data policy (runs BEFORE any planner or model): owners, residents, demographics, crime, school ratings."""
     q = query.lower()
-    return any(t in q for t in PEOPLE_TERMS)
+    return any(t in q for t in PEOPLE_TERMS) or bool(_PEOPLE_RE.search(q))
 
 
 def load_senses() -> dict[str, Any]:
@@ -728,10 +734,17 @@ class Engine:
                     height = float(np.median(v))
                     if height > float(oc["max_height_m"]):
                         reasons.append(f"height {height:.1f} m > {oc['max_height_m']} (lidar)")
+        bover = None
+        if oc.get("max_building_overlap") is not None:  # on a building footprint → a roof (works without lidar)
+            gm_ = to_measure(shape(refined_geom or outline["geometry"]))
+            bover = self._building_overlap(gm_)
+            if bover > float(oc["max_building_overlap"]):
+                reasons.append(f"{100 * bover:.0f}% on a building footprint (Overture)")
         res = {"pass": not reasons, "reason": "; ".join(reasons) or "ok", "area_m2": round(area, 1),
                "compactness": round(float(comp), 3), "colour_frac": None if colour_frac is None else round(colour_frac, 3),
                "colour_area_m2": None if colour_area is None else round(colour_area, 1),
-               "height_m": None if height is None else round(height, 2), "refined": refined_geom is not None}
+               "height_m": None if height is None else round(height, 2),
+               "building_overlap": None if bover is None else round(bover, 2), "refined": refined_geom is not None}
         if refined_geom is not None:
             res["geometry"] = refined_geom
         cache[key] = res
@@ -750,6 +763,28 @@ class Engine:
         x0, y0 = float(self.index.meta["x0_m"][i]), float(self.index.meta["y0_m"][i])
         top = y0 + config.CHIP_M
         return self.index.bounds_wgs84((x0 + pc * pm, top - (pr + 1) * pm, x0 + (pc + 1) * pm, top - pr * pm))
+
+    def _building_overlap(self, gm) -> float:
+        """Fraction of a geometry (EPSG:32617) on Overture building footprints; buildings cached per ~1 km tile."""
+        from shapely.strtree import STRtree
+
+        from groundtruth.vector import store
+
+        cache = self.__dict__.setdefault("_btiles", OrderedDict())
+        c = gm.centroid
+        key = (int(c.x // 1000), int(c.y // 1000))
+        if key not in cache:
+            tb = to_wgs84(box(key[0] * 1000 - 100, key[1] * 1000 - 100, key[0] * 1000 + 1100, key[1] * 1000 + 1100)).bounds
+            fc, _ = store().buildings(tb)
+            bg = [to_measure(shape(f["geometry"])) for f in fc["features"]]
+            cache[key] = (bg, STRtree(bg) if bg else None)
+            while len(cache) > 256:
+                cache.popitem(last=False)
+        bg, tree = cache[key]
+        if tree is None:
+            return 0.0
+        return float(sum(gm.intersection(bg[int(j)]).area for j in tree.query(gm, predicate="intersects"))
+                     / max(gm.area, 1e-9))
 
     def _object_feature(self, i: int, cell: int, patch: int | None, score: float, rank: int, concept: str | None,
                         base_conf: float, extra: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -1699,6 +1734,86 @@ class Engine:
             if p.get("id") not in out and p.get("height") is not None:
                 out[p.get("id")] = {"height_m": float(p["height"]), "source": "overture"}
         return out
+
+    @memo()
+    def find_derived(self, kind: str = "house_with_pool", place: str | None = None, require: Sequence[str] = (),
+                     sort: str | None = None, top: int | None = None, docks_new_since: int | None = None) -> Envelope:
+        """Derived concepts over verified objects (conf/derived.json): houses with pools, optionally lakefront and with
+        their own dock. Precomputed per place (scripts/build_derived.py → data/derived/<version>/<place>/).
+        ``require`` ⊆ {lakefront, has_dock}; ``sort`` = "pool_area" (biggest first) with ``top``; ``docks_new_since``
+        keeps houses with a dock that compare_years calls new since that year. Features: houses (kind house_with_pool)
+        + their docks (kind dock) + house→dock links (kind dock_link); counts are houses."""
+        tool = "find_derived"
+        if kind != "house_with_pool":
+            return declined(tool, VERSION, f"unknown derived concept {kind!r}")
+        if not place:
+            return declined(tool, VERSION, "houses with pools need a place (precomputed per place)")
+        d = config.data_dir("derived") / place.replace(" ", "_")
+        if not (d / "houses.geojson").exists():
+            return declined(tool, VERSION, f"houses with pools are not precomputed for {place} yet")
+        t = StepTimer()
+        meta = json.loads((d / "meta.json").read_text())
+        with t.step("load", f"precomputed {place} ({meta.get('built')})"):
+            houses = json.loads((d / "houses.geojson").read_text())["features"]
+            links = json.loads((d / "links.geojson").read_text())["features"]
+        n_all = len(houses)
+        with t.step("filter", f"require {list(require) or 'nothing'}"):
+            for r in require:
+                houses = [h for h in houses if h["properties"].get(r)]
+        new_info = None
+        if docks_new_since:
+            dock_ids = sorted({i for h in houses for i in h["properties"].get("dock_ids", []) if i})
+            with t.step("compare_years", f"{len(dock_ids)} docks vs {docks_new_since}"):
+                cy = self.compare_years(dock_ids, from_year=docks_new_since)
+            if cy.status == "declined":
+                return declined(tool, VERSION, f"docks since {docks_new_since}: {cy.declined_reason}")
+            new = {f["properties"].get("example") or f.get("id") for f in cy.result.geojson["features"]
+                   if f["properties"].get("change") == "new"}
+            houses = [h for h in houses if any(i in new for i in h["properties"].get("dock_ids", []))]
+            new_info = {"docks_checked": len(dock_ids), "docks_new": len(new), **{k: cy.result.metrics.get(k)
+                                                                                   for k in ("new", "existing", "unsure")}}
+        if sort == "pool_area":
+            houses = sorted(houses, key=lambda h: (-float(h["properties"].get("pool_area_m2") or 0), h["properties"]["id"]))
+            houses = houses[: int(top or json.loads((config.SENSES_PATH.parent / "derived.json").read_text())["biggest_n"])]
+        ids = {h["properties"]["id"] for h in houses}
+        feats = []
+        for r, h in enumerate(houses):
+            h = json.loads(json.dumps(h))
+            h["properties"]["rank"] = r + 1
+            h["properties"]["geometry_kind"] = "outline"
+            feats.append(h)
+        if "has_dock" in require:
+            for h in houses:
+                for k, dg in enumerate(h["properties"].get("dock_geometries", [])):
+                    feats.append({"type": "Feature", "id": f"dock:{h['properties']['id']}:{k}", "geometry": dg,
+                                  "properties": {"kind": "dock", "house_id": h["properties"]["id"], "geometry_kind": "outline"}})
+            feats += [l for l in links if l["properties"]["house_id"] in ids]
+        hs = [f for f in feats if f["properties"].get("kind") == "house_with_pool"]
+        pa = sum(float(f["properties"].get("pool_area_m2") or 0) for f in hs)
+        metrics = {"count": len(hs), "count_detected": len(hs), "count_unit": "houses (Overture buildings) with a verified pool",
+                   "place": place, "require": list(require), "sort": sort, "of_houses_with_pools": n_all,
+                   "pool_area_m2_total": round(pa, 1), "pool_area_acres_total": round(pa / SQM_PER_ACRE, 3),
+                   "docks": sum(1 for f in feats if f["properties"].get("kind") == "dock"), "mode": "exhaustive_scan",
+                   "built": meta.get("built"), "pools_in_place": meta.get("pools")}
+        if new_info:
+            metrics["docks_new_since"] = {"year": docks_new_since, **new_info}
+        c = json.loads((config.SENSES_PATH.parent / "derived.json").read_text())
+        limits = self._limits() + [
+            "A 'house' is an Overture building (residential where classed, else a small non-commercial footprint): "
+            "never its owners or residents",
+            f"A pool belongs to the nearest such building within {c['house_with_pool']['pool_to_house_max_m']} m; pools "
+            "in mapped water or on a building are excluded",
+            f"Lakefront: within {c['lakefront']['max_dist_m']} m of the lake with no major road or other building between",
+            f"Own dock: a verified dock touching the lake within {c['has_dock']['max_dist_from_shore_point_m']} m of the "
+            "house's shore point, nearest to it among all lakefront homes (one dock → one house)",
+            "Docks come from open-vocabulary detection (boat dock: 12/12 by eye)"]
+        return self._env(tool, status="ok", result=Result(geojson=feature_collection(feats), metrics=metrics),
+                         confidence=self._mean_conf(hs) or 0.0,
+                         method="Verified pools (find_all, dense) → nearest residential Overture building → lakefront "
+                                "test vs the OSM lake polygon + major roads + buildings → docks (Grounding DINO + SAM 2.1) "
+                                "assigned to their nearest lakefront home",
+                         assumptions=["'houses with pools' = backyard pools at residences"], limits=limits,
+                         sources=[self.provider.overture_source("buildings")], steps=t.steps)
 
     def canopy(self, place: str | None = None, bbox: Sequence[float] | None = None, min_tree_m: float = 2.5) -> Envelope:
         """Tree canopy from lidar: cells with height-above-ground ≥ min_tree_m that are not under an Overture building.

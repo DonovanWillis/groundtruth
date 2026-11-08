@@ -217,6 +217,17 @@ def _warmup() -> None:
                 e.refine(None, [ex, hits[0]["properties"]["example"]], [hits[-1]["properties"]["example"]], k=50,
                          concept="swimming_pool", candidates=[h["properties"]["example"] for h in hits])
             WARM["core_ms"] = round((_t.perf_counter() - t0) * 1000)
+            if os.environ.get("LOCAL_LLM", "1") == "1":  # local LLM: one tiny plan so the first chat isn't cold
+                try:
+                    from api.planner.llm import local
+
+                    if local.health():
+                        _, info = local.llm_plan("houses with pools", None)
+                        WARM["llm"] = {"ok": not info.get("error"), "ms": info.get("ms")}
+                    else:
+                        WARM["llm"] = {"ok": False, "error": "unreachable (rules planner will answer)"}
+                except Exception as err:  # never block the API on the laptop
+                    WARM["llm"] = {"ok": False, "error": f"{type(err).__name__}: {err}"[:160]}
             if e.aoi == "county" and os.environ.get("GROUNDTRUTH_WARMUP_CHAIN", "1") == "1":
                 from groundtruth.planner import run as plan_run
 
@@ -285,7 +296,7 @@ def _env(e: Envelope) -> JSONResponse:
 # ---------------- meta ----------------
 @app.get("/api/v1/health")
 def health() -> dict[str, Any]:
-    return {"ok": bool(WARM["done"]), "warming": not WARM["done"], "warmup": {k: WARM.get(k) for k in ("core_ms", "chain_ms", "places_ms", "ms", "error", "place")},
+    return {"ok": bool(WARM["done"]), "warming": not WARM["done"], "warmup": {k: WARM.get(k) for k in ("core_ms", "chain_ms", "places_ms", "ms", "error", "place", "llm")},
             "contract": CONTRACT, "engine_version": VERSION, "indexes": available_indexes(),
             "primary_year": _provider.primary_year}
 
@@ -326,7 +337,9 @@ def agent_run(b: AgentIn) -> JSONResponse:
     """Rules planner (deterministic, no LLM): parse → real tool calls → map actions citing step envelopes."""
     from groundtruth.planner import run as plan_run
 
-    return JSONResponse(plan_run(lambda year: eng(b.aoi, year), b.text, b.context))
+    from api.planner.brain import chat
+
+    return JSONResponse(chat(lambda year: eng(b.aoi, year), b.text, b.context))
 
 
 # ---------------- tools ----------------

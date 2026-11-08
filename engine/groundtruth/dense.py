@@ -294,7 +294,26 @@ class DenseSet:
                 dark = z["v_mean"] < float(sh.get("v_max", 110))
                 near_tall = z["tall_within_m"] > float(sh.get("tall_m", 8))
                 out &= ~(dark & near_tall)
+        if oc.get("max_building_overlap") is not None:  # a "pool" lying on a building footprint is a roof
+            out &= ~(self.building_overlap() > float(oc["max_building_overlap"]))
         return out
+
+    def building_overlap(self) -> np.ndarray:
+        """Fraction of each outline lying on Overture building footprints (0 where no outline). Cached."""
+        if getattr(self, "_bo", None) is None:
+            from groundtruth.geo import to_measure
+            from groundtruth.vector import store
+
+            fc, _ = store().buildings(self.meta["bbox"])
+            bg = [to_measure(shape(f["geometry"])) for f in fc["features"]]
+            tree = STRtreeLazy(bg)
+            bo = np.zeros(len(self.feats))
+            for k, f in enumerate(self.feats):
+                if f.get("geometry"):
+                    g = to_measure(shape(f["geometry"]))
+                    bo[k] = sum(g.intersection(bg[j]).area for j in tree.query(g)) / max(g.area, 1e-9)
+            self._bo = bo
+        return self._bo
 
     def sims(self, qp: np.ndarray) -> np.ndarray:
         return self.tokens @ qp
@@ -319,3 +338,16 @@ class DenseSet:
                 out.append(f"{index.ids[i]}#{cell}:{pr * 16 + pc}")
             self._ids = out
         return self._ids
+
+
+class STRtreeLazy:
+    """STRtree over a possibly empty list (query → [] when empty), intersecting candidates only."""
+
+    def __init__(self, geoms: list[Any]) -> None:
+        from shapely.strtree import STRtree
+
+        self.g = geoms
+        self.t = STRtree(geoms) if geoms else None
+
+    def query(self, geom) -> list[int]:
+        return [int(j) for j in self.t.query(geom, predicate="intersects")] if self.t is not None else []

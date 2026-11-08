@@ -55,6 +55,11 @@ class Plan:
     min_height_m: float | None = None
     year: int | None = None
     new_since: int | None = None
+    require: list[str] = field(default_factory=list)  # derived: lakefront, has_dock
+    sort: str | None = None  # derived: pool_area (biggest first)
+    docks_new_since: int | None = None
+    follow_up_of: str | None = None
+    effective_text: str | None = None
     notes: list[str] = field(default_factory=list)
 
 
@@ -148,6 +153,26 @@ def parse(text: str) -> Plan:
                  r"\btree (canopy|height|cover)\b", core):
         p.target_kind, p.target = "canopy", "trees"
         return p
+    # derived modifiers (conversation follow-ups): lake / dock access, docks since <year>, biggest
+    if re.search(r"\b(lake ?front|waterfront|on the lake|lake (and dock )?access|by the lake|on the water)\b", t):
+        p.require.append("lakefront")
+    if re.search(r"\b(dock access|(their |its |own |a |with )?(own )?docks?|boat docks? of their own)\b", t) and \
+            re.search(r"\b(with|have|has|their|own|access|and)\b.*\bdocks?\b|\bdocks?\b.*\baccess\b", t):
+        p.require += [r for r in ("lakefront", "has_dock") if r not in p.require]
+    dm = re.search(r"\bdocks?\b.*\b(?:added|new|built)\b.*\bsince (20\d\d)\b|\b(?:added|new|built)\b.*\bdocks?\b.*\bsince (20\d\d)\b", t)
+    if dm:
+        p.docks_new_since = int(dm.group(1) or dm.group(2))
+        p.new_since = None
+        p.require += [r for r in ("lakefront", "has_dock") if r not in p.require]
+    if re.search(r"\b(biggest|largest)\b", t):
+        p.sort = "pool_area"
+    if re.search(r"\b(houses?|homes?)\b.*\b(with|have|has)\b.*\bpools?\b|\bpool (houses|homes)\b", core + " " + t):
+        p.target_kind, p.target, p.concept, p.concept_query = "derived", "house_with_pool", "swimming_pool", "pools"
+        return p
+    if (p.require or p.sort or p.docks_new_since) and not re.sub(
+            r"\b(with|and|lake|dock|docks|access|their|own|which|that|have|has|added|since|show|the|biggest|largest|"
+            r"ones|lakefront|waterfront|on|water|only|me|20\d\d)\b", "", core).strip(" ,"):
+        return p  # modifiers only: a follow-up (resolved against the previous request in run())
     senses = load_senses()
     best = None
     for key, entry in senses.items():
@@ -180,10 +205,13 @@ EXPORT_RE = re.compile(r"^\s*(?:please\s+)?(?:export|download|save)\b(?:.*?\b(cs
 MAX_INTERMEDIATE_FEATURES = 500
 
 
-def run(engine_for, text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
+def run(engine_for, text: str, context: dict[str, Any] | None = None, plan_override: Plan | None = None,
+        follow_up: bool | None = None) -> dict[str, Any]:
     """engine_for(year) → Engine. ``context`` (from the UI): {place: the place on screen, last_text: the previous
     request}; a request without a place uses context.place, and "export them as CSV" exports the last request's result.
-    Deterministic, so results are cached per (text, context) (GROUNDTRUTH_PLANNER_CACHE entries, default 64).
+    ``plan_override``: a plan made elsewhere (the local LLM, already validated) executed by the same deterministic
+    executor; ``follow_up`` says whether it refines the previous request. Deterministic, so results are cached per
+    (text, context, plan) (GROUNDTRUTH_PLANNER_CACHE entries, default 64).
     Returns {planner, plan, steps:[{ref, tool, envelope}], actions:[...], status, cached}."""
     import copy
     import os
@@ -193,13 +221,25 @@ def run(engine_for, text: str, context: dict[str, Any] | None = None) -> dict[st
     if _CACHE is None:
         _CACHE = OrderedDict()
     context = {k: v for k, v in (context or {}).items() if v}
-    key = json.dumps([text.strip().lower(), context], sort_keys=True)
+    # a follow-up with no target of its own ("in Lake Norman", "with lake and dock access", "show the biggest ones")
+    # refines the previous request: the effective request is the previous one + this one
+    if context.get("last_text") and not EXPORT_RE.search(text) and not _people(text):
+        p0 = parse(text)
+        is_fu = follow_up if follow_up is not None else (
+            not p0.target_kind and (p0.place or p0.require or p0.sort or p0.docks_new_since or p0.layer or p0.minutes))
+        if is_fu:
+            prev = context["last_text"]
+            text = f"{prev} {text}"
+            context = {k: v for k, v in context.items() if k != "last_text"}
+            context["_follow_up_of"] = prev
+    key = json.dumps([text.strip().lower(), context, asdict(plan_override) if plan_override else None],
+                     sort_keys=True, default=str)
     if key in _CACHE:
         _CACHE.move_to_end(key)
         out = copy.deepcopy(_CACHE[key])
         out["cached"] = True
         return out
-    out = _run(engine_for, text, context)
+    out = _run(engine_for, text, context, plan_override)
     if out["status"] in ("ok", "declined"):
         _CACHE[key] = copy.deepcopy(out)
         while len(_CACHE) > int(os.environ.get("GROUNDTRUTH_PLANNER_CACHE", "64")):
@@ -208,8 +248,12 @@ def run(engine_for, text: str, context: dict[str, Any] | None = None) -> dict[st
     return out
 
 
-def _slim(steps: list[dict[str, Any]], keep_refs: set[str]) -> None:
-    """Big intermediate feature sets are left out of the response (never silently: metrics.features_omitted)."""
+def _slim(steps: list[dict[str, Any]], keep_refs: set[str], actions: list[dict[str, Any]] | None = None,
+          final_ref: str | None = None) -> None:
+    """Big intermediate feature sets are left out of the response (never silently: metrics.features_omitted). Map
+    actions that pointed at a slimmed step are redirected to the final result set, so the map and every count show the
+    final set (a client must never render an emptied intermediate step as "0 detected")."""
+    slimmed = set()
     for s in steps:
         res = s["envelope"].get("result") or {}
         fc = res.get("geojson") or {}
@@ -219,10 +263,22 @@ def _slim(steps: list[dict[str, Any]], keep_refs: set[str]) -> None:
             res.setdefault("metrics", {})["features_omitted"] = n
             s["envelope"].setdefault("limits", []).append(
                 f"{n} features omitted from this intermediate step in the agent response; the final step carries the set")
+            slimmed.add(s["ref"])
+    if actions is not None and final_ref:
+        seen = False
+        for a in list(actions):
+            if a.get("action") in ("add_results", "set_filter") and a.get("envelope_ref") in slimmed | {final_ref}:
+                if seen:  # one results action for the final set is enough
+                    actions.remove(a)
+                    continue
+                a.update(action="add_results", envelope_ref=final_ref, layer_id="results")
+                seen = True
 
 
-def _run(engine_for, text: str, context: dict[str, Any]) -> dict[str, Any]:
-    plan = parse(text)
+def _run(engine_for, text: str, context: dict[str, Any], plan_override: Plan | None = None) -> dict[str, Any]:
+    plan = plan_override if plan_override is not None else parse(text)
+    if plan_override is not None:
+        plan.text = text
     steps: list[dict[str, Any]] = []
     actions: list[dict[str, Any]] = []
     extra: dict[str, Any] = {}
@@ -234,7 +290,8 @@ def _run(engine_for, text: str, context: dict[str, Any]) -> dict[str, Any]:
         return ref
 
     def done(status: str) -> dict[str, Any]:
-        _slim(steps, keep)
+        _slim(steps, keep, actions, extra.get("_final_ref"))
+        extra.pop("_final_ref", None)
         return {"plan": {**asdict(plan), **extra}, "steps": steps, "actions": actions, "status": status, "planner": PLANNER}
 
     if _people(text):
@@ -269,15 +326,20 @@ def _run(engine_for, text: str, context: dict[str, Any]) -> dict[str, Any]:
         plan.place = context["place"]
         plan.notes.append(f"place '{plan.place}' taken from the map (context)")
     if not plan.target_kind:
-        actions.append({"action": "say", "text": "I didn't recognise what to look for. Try: swimming pools, parking lots, "
-                                                 "solar panels, schools, houses, tennis courts (optionally 'in <place>')."})
+        actions.append({"action": "say", "text": "I didn't recognise what to look for. Try: houses with pools, boat docks "
+                                                 "on Lake Norman, or buildings taller than 30 m in Uptown."})
         return done("declined")
+    if context.get("_follow_up_of"):
+        plan.follow_up_of = context["_follow_up_of"]
+    plan.effective_text = text
     eng = engine_for(plan.year)
     places = _places()
     bbox = places[plan.place]["bbox"] if plan.place else None
     if plan.place:
         actions.append({"action": "fly_to", "bbox": bbox, "label": plan.place})
     r_cur, current, r_fa, what = None, None, None, plan.target
+    if plan.target_kind == "derived":
+        return _run_derived(eng, plan, step, actions, extra, keep, done)
     if plan.target_kind == "canopy":
         cv = eng.canopy(place=plan.place, bbox=bbox)
         r_cv = step("canopy", cv)
@@ -417,6 +479,11 @@ def _run(engine_for, text: str, context: dict[str, Any]) -> dict[str, Any]:
     elif plan.layer:
         scope += f" within {plan.within_m:g} m of {LAYER_LABELS.get(plan.layer, plan.layer)}"
     parts = [f"{n} {what}{scope} ({r_cur})"]
+    if plan.target_kind == "concept":
+        from groundtruth.rerank import concept_conf
+
+        if concept_conf(plan.concept).get("experimental"):  # solar / parking: typed requests work, but say so
+            parts.insert(0, f"Experimental: {plan.concept.replace('_', ' ')} detection is not yet reliable")
     if ms is not None and ms.status != "declined" and plan.target_kind != "place_category":
         parts.append(f"{ms.result.metrics.get('area_acres_total')} acres in total ({steps[-2]['ref'] if current['features'] else ''})")
         if dist_layers:
@@ -437,4 +504,58 @@ def _run(engine_for, text: str, context: dict[str, Any]) -> dict[str, Any]:
                          f"{mm.get('unsure', 0)} unsure ({r_cy})")
     actions.append({"action": "say", "text": "; ".join(parts) + "."})
     keep.add(r_cur)
+    extra["_final_ref"] = r_cur
     return {**done("ok"), "current_ref": r_cur}
+
+
+SUGGEST_PLACES = ["Lake Norman", "Ballantyne", "Myers Park"]
+
+
+def _run_derived(eng, plan: Plan, step, actions, extra, keep, done) -> dict[str, Any]:
+    """'houses with pools' (+ lake / dock access, biggest, docks since <year>). No place → a county overview (heat glow of
+    residential pools, NOT a count) and 'Where should I look?'. With a place → the precomputed derived set."""
+    assume = "I took “houses with pools” as backyard pools at homes."
+    if not plan.place:
+        pc = eng.pick_candidates("swimming pool")
+        r_pick = step("pick_candidates", pc)
+        tiles = [f for f in pc.result.geojson["features"] if not f["properties"].get("no_clear_example")]
+        chosen = next((f for f in tiles if f["properties"]["sense_id"] == DEFAULT_SENSE["swimming_pool"]), tiles[0])
+        neg = [f["properties"]["example"] for f in tiles if f is not chosen]
+        env = eng.find_all([chosen["properties"]["example"]], [], concept="swimming_pool", soft_exclude=neg)
+        r = step("find_all", env)
+        keep.add(r)
+        extra.update(chosen_sense=chosen["properties"]["sense_id"], assumed=assume)
+        actions.append({"action": "heatmap", "envelope_ref": r, "label": "residential pools (top matches)"})
+        actions.append({"action": "say", "text": f"{assume} Here's where they cluster across the county (top matches, "
+                                                 f"not a full count). Where should I look? ({r})"})
+        actions.append({"action": "suggest_places", "places": SUGGEST_PLACES})
+        extra["_final_ref"] = r
+        return {**done("ok"), "current_ref": r, "ask": "where"}
+    env = eng.find_derived("house_with_pool", place=plan.place, require=tuple(plan.require), sort=plan.sort,
+                           docks_new_since=plan.docks_new_since)
+    r = step("find_derived", env)
+    if env.status == "declined":
+        actions.append({"action": "say", "text": f"{env.declined_reason[:1].upper()}{env.declined_reason[1:]}. "
+                                                 f"Try Lake Norman ({r})."})
+        return done("partial")
+    keep.add(r)
+    m = env.result.metrics
+    n = m["count"]
+    actions.append({"action": "add_results", "layer_id": "results", "envelope_ref": r})
+    where = f"around {plan.place}" if plan.place == "Lake Norman" else f"in {plan.place}"
+    if plan.docks_new_since:
+        nd = (m.get("docks_new_since") or {}).get("docks_new", 0)
+        txt = f"{n} lakefront houses with a pool whose dock looks new since {plan.docks_new_since} ({nd} new docks)."
+    elif "has_dock" in plan.require:
+        txt = f"{n:,} lakefront houses with a pool and their own dock."
+    elif "lakefront" in plan.require:
+        txt = f"{n:,} lakefront houses with a pool {where}."
+    else:
+        txt = f"Found {n:,} houses with pools {where}."
+    if plan.sort == "pool_area":
+        txt = f"The {n} biggest pools among them, largest first." if plan.follow_up_of else f"{txt} Showing the {n} biggest."
+    if not plan.follow_up_of:
+        txt = f"{assume} {txt}"
+    actions.append({"action": "say", "text": f"{txt} ({r})"})
+    extra["_final_ref"] = r
+    return {**done("ok"), "current_ref": r}

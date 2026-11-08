@@ -1,0 +1,24 @@
+{
+  "_doc": "Derived concepts (redesign): built from verified objects + Overture buildings + OSM water/roads. Thresholds here; limits are stated in every envelope. Houses are BUILDINGS: never owners or residents.",
+  "house_with_pool": {
+    "pool_to_house_max_m": 40,
+    "residential_classes": ["house", "detached", "semidetached_house", "terrace", "residential", "bungalow", "apartments"],
+    "unclassed_max_footprint_m2": 600,
+    "exclude_classes": ["commercial", "retail", "industrial", "warehouse", "office", "school", "church", "hospital", "hotel", "garage", "shed", "roof", "parking"],
+    "pool_on_building_max_frac": 0.3,
+    "min_footprint_m2": 60
+  },
+  "lakefront": {
+    "lake_min_area_km2": 1.0,
+    "max_dist_m": 100,
+    "major_highways": ["motorway", "trunk", "primary", "secondary", "motorway_link", "trunk_link", "primary_link", "secondary_link"]
+  },
+  "has_dock": {
+    "dock_concept": "boat dock",
+    "dock_touch_water_m": 6,
+    "max_dist_from_shore_point_m": 50,
+    "max_house_shore_m": 60,
+    "max_house_dock_m": 130
+  },
+  "biggest_n": 25
+}

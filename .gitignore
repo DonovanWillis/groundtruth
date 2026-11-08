@@ -28,3 +28,4 @@ web/dist/
 Thumbs.db
 .vscode/
 .idea/
+web/node_modules
