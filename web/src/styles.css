@@ -1,6 +1,15 @@
 /* Groundtruth demo — Devin-style (ORYN tokens in ../shared/tokens.css): neutral canvas, white panels,
-   ink #191919, muted #5c5c5c, Inter 400, sections separated by tint not lines. Light theme only. */
-:root { color-scheme: light; }
+   ink #191919, muted #5c5c5c, Inter 400, sections separated by tint not lines. The tokens switch to dark with
+   prefers-color-scheme / [data-theme]; the few local colours below follow them. Text pairs are WCAG AA (>= 4.5:1). */
+:root { color-scheme: light;
+  --limits-fg: #5a4300;   /* on the limits tint (~#f7f4ed): 8.5:1 */
+  --ch-new-fg: #b0400f; --ch-unsure-fg: #7a5000; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { color-scheme: dark;
+    --limits-fg: #ecc66b; /* on the dark limits tint (~#272319): 9.4:1 */
+    --ch-new-fg: #ff8a55; --ch-unsure-fg: #e9b949; }
+}
+:root[data-theme="dark"] { color-scheme: dark; --limits-fg: #ecc66b; --ch-new-fg: #ff8a55; --ch-unsure-fg: #e9b949; }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body { background: var(--surface-0); color: var(--fg); font: 400 var(--text-14)/1.45 var(--font-sans); letter-spacing: -0.005em;
@@ -55,10 +64,11 @@ input.num { width: 72px; }
 .tag.partial { background: color-mix(in srgb, var(--warning) 12%, transparent); color: var(--warning); }
 .tag.declined { background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); }
 .tag.running { background: color-mix(in srgb, var(--info) 10%, transparent); color: var(--info); }
-.tag.mock { background: #fff1d6; color: #7a5000; font-weight: 500; letter-spacing: .02em; }
-.tag.ch-new { background: color-mix(in srgb, #ff6a2b 16%, transparent); color: #b0400f; }
+.tag.planner { background: color-mix(in srgb, var(--info) 13%, var(--surface-1)); color: var(--info); font-weight: 500; letter-spacing: .02em; }
+.tag.envconf { font-family: var(--font-mono); }
+.tag.ch-new { background: color-mix(in srgb, #ff6a2b 16%, transparent); color: var(--ch-new-fg); }
 .tag.ch-existing { background: var(--surface-3); }
-.tag.ch-unsure { background: color-mix(in srgb, #e3b341 22%, transparent); color: #7a5000; }
+.tag.ch-unsure { background: color-mix(in srgb, #e3b341 22%, transparent); color: var(--ch-unsure-fg); }
 .spin { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--line-strong); border-top-color: var(--fg);
   animation: spin 800ms linear infinite; vertical-align: -2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -77,7 +87,7 @@ input.num { width: 72px; }
   box-shadow: var(--shadow-overlay); transition: box-shadow var(--dur) var(--ease-standard); }
 .ask-big:focus-within { box-shadow: 0 0 0 1px var(--fg), var(--shadow-overlay); }
 .ask-big input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; font-size: var(--text-20); letter-spacing: -0.015em; padding: 10px 0; }
-.ask-big input::placeholder { color: #a3a3a0; }
+.ask-big input::placeholder { color: var(--fg-subtle); }
 .hero > .chips { justify-content: center; }
 .parsed { text-align: center; margin-top: -6px; }
 .hood { margin-top: 26px; background: var(--surface-1); border-radius: var(--radius-panel); padding: 16px 18px; display: flex; flex-direction: column; gap: 12px;
@@ -257,15 +267,21 @@ input.num { width: 72px; }
 .method { font-size: 11.5px; color: var(--fg-muted); margin-top: 4px; line-height: 1.45; }
 .method span { color: var(--fg); margin-right: 6px; }
 .limits { margin: 6px 0 0; padding: 7px 10px 7px 24px; background: color-mix(in srgb, var(--warning) 7%, var(--surface-1)); border-radius: 8px;
-  font-size: 11.5px; line-height: 1.45; color: #5a4300; }
+  font-size: 11.5px; line-height: 1.45; color: var(--limits-fg); }
 .limits li + li { margin-top: 2px; }
-.collapsed-note { font-size: 11px; color: var(--fg-subtle); margin-top: 4px; }
+.collapsed-note { font-size: 11px; color: var(--fg-muted); margin-top: 4px; }
 
 .agent { padding: 0 14px 16px; display: flex; flex-direction: column; gap: 10px; }
-.agent-banner { background: #fff8e8; border-radius: 12px; padding: 10px 12px; }
-.agent-banner p { margin: 6px 0 0; font-size: var(--text-12); color: #5a4300; line-height: 1.5; }
+.agent-banner { background: color-mix(in srgb, var(--info) 6%, var(--surface-1)); border-radius: 12px; padding: 10px 12px; }
+.agent-banner p { margin: 6px 0 0; font-size: var(--text-12); color: var(--fg-muted); line-height: 1.5; }
 .agent-prompt { display: flex; gap: 8px; align-items: center; background: var(--surface-0); border-radius: 12px; padding: 8px 8px 8px 12px; font-size: var(--text-13); }
-.agent-prompt span { flex: 1; }
+.agent-prompt input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; padding: 4px 0; }
+.agent-prompt:focus-within { box-shadow: 0 0 0 1px var(--fg); }
+.agent-chips { gap: 6px; }
+.agent-chips .chip { padding: 4px 10px; font-size: var(--text-12); }
+.chip:disabled { opacity: .5; cursor: default; }
+.am.prompt { background: var(--surface-0); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.am-thumbs > div.nce { color: var(--fg-muted); }
 .agent-msgs { display: flex; flex-direction: column; gap: 6px; }
 .am { font-size: var(--text-13); padding: 8px 10px; border-radius: 10px; animation: fadein var(--dur) var(--ease-emphasis); }
 .am.say { background: var(--surface-0); }
@@ -300,3 +316,15 @@ input.num { width: 72px; }
   .tiles { grid-template-columns: repeat(2, 1fr); }
 }
 .dbg { position: absolute; left: 14px; right: 14px; bottom: 80px; z-index: 50; background: #fff; font: 11px var(--font-mono); white-space: pre-wrap; padding: 6px; }
+
+/* ---------------- v0.4 additions ---------------- */
+.count-line { margin-top: 10px; font-size: var(--text-13); color: var(--fg); }
+.count-line b { font-weight: 500; }
+.count-line .muted { font-size: var(--text-12); }
+.cthumb.empty { background: repeating-linear-gradient(45deg, var(--surface-3) 0 6px, var(--surface-2) 6px 12px); }
+.tile.no-clear { cursor: default; box-shadow: 0 0 0 1px var(--line); background: var(--surface-2); }
+.tile.no-clear:hover { transform: none; box-shadow: 0 0 0 1px var(--line); }
+.tile.no-clear .sense { color: var(--fg-muted); }
+.nce-img { aspect-ratio: 1; display: grid; place-items: center; color: var(--fg-muted); font-size: var(--text-13);
+  background: repeating-linear-gradient(45deg, var(--surface-3) 0 10px, var(--surface-2) 10px 20px); }
+.nce-img span { background: var(--surface-1); padding: 4px 10px; border-radius: var(--radius-pill); }

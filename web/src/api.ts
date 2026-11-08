@@ -1,5 +1,5 @@
 // Thin client for the Groundtruth API (docs/CONTRACT.md). Every tool returns an Envelope.
-// Every tool call is published on a tiny bus so the work log sees UI calls and (mock) agent calls alike.
+// Every tool call is published on a tiny bus so the work log sees UI calls and agent (rules planner) steps alike.
 
 export type Step = { phase: string; detail: string; ms: number };
 export type Feature = {
@@ -107,4 +107,31 @@ export function thumb(url: string | undefined): string {
   if (!url) return "";
   if (!thumbAoi || url.includes("aoi=")) return url;
   return `${url}${url.includes("?") ? "&" : "?"}aoi=${encodeURIComponent(thumbAoi)}`;
+}
+
+/** Publish an envelope produced elsewhere (e.g. an agent step) on the call bus so the work log shows it. */
+export function publishEnvelope(name: string, env: Envelope, origin: "ui" | "agent", body: Record<string, unknown> = {}) {
+  const wallMs = Math.round(env.steps.reduce((s, x) => s + (Number(x.ms) || 0), 0));
+  emit({ id: ++nextId, tool: name, origin, body, phase: "done", env: { ...env, wallMs }, t: Date.now() });
+}
+
+// ---------------- agent (rules planner) ----------------
+export type AgentStep = { ref: string; tool: string; envelope: Envelope };
+export type AgentResponse = {
+  planner: string;
+  plan: Record<string, any>;
+  status: "ok" | "partial" | "declined";
+  steps: AgentStep[];
+  actions: Record<string, any>[];
+};
+
+/** POST /api/v1/agent/run: the server-side deterministic rules planner (no LLM). */
+export async function agentRun(text: string, aoi?: string): Promise<AgentResponse> {
+  const r = await fetch(`${BASE}/agent/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, ...(aoi ? { aoi } : {}) }),
+  });
+  if (!r.ok) throw new Error(`agent/run: HTTP ${r.status} ${(await r.text()).slice(0, 240)}`);
+  return r.json();
 }

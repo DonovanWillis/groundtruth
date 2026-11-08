@@ -17,8 +17,11 @@
   "solar_installation": {
     "rerank": {"patch_weight": 0.8, "colour_weight": 0.2, "colour": {"hsv_lo": [190, 30, 20], "hsv_hi": [250, 255, 110]}, "pool": 400},
     "count_conf": 0.5,
-    "detect": {"prefilter_sim": 0.4, "score_min": 0.5, "colour_min": 0.2, "sim_min": 0.3, "nms_m": 30, "neg_margin": 0.0},
-    "object_check": {"area_m2": [15, 200000], "compactness_min": 0.1, "colour_frac_min": 0.0}
+    "pick_colour_stat": "mean",
+    "detect": {"prefilter_sim": 0.4, "score_min": 0.5, "colour_min": 0.2, "sim_min": 0.4, "nms_m": 30, "neg_margin": 0.0},
+    "object_check": {"area_m2": [15, 200000], "compactness_min": 0.3, "colour_frac_min": 0.5, "colour_area_min_m2": 25,
+                     "outline_by_colour": true,
+                     "_doc": "Dark roof-edge shadows share the panel colour; they are thin strips, so compactness + a minimum panel-colour area reject them."}
   },
   "parking_lot": {"rerank": {"patch_weight": 1.0, "colour_weight": 0.0, "colour": null, "pool": 400}, "count_conf": 0.5,
                   "detect": {"prefilter_sim": 0.4, "score_min": 0.5, "colour_min": 0.0, "nms_m": 40, "neg_margin": 0.0},

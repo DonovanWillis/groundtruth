@@ -1,4 +1,4 @@
-// Devin-style work log: every tool call (UI or mock agent) with its envelope: status, confidence, steps (phase · ms),
+// Devin-style work log: every tool call (UI or rules-planner agent step) with its envelope: status, confidence, steps (phase · ms),
 // method, assumptions and limits. Limits are shown as text, never hidden behind a click, for the latest calls.
 import { useEffect, useState } from "react";
 import { CallEvent, TimedEnvelope, onCall } from "./api";
@@ -9,6 +9,7 @@ type Entry = {
 };
 
 function summarise(tool: string, body: Record<string, any>): string {
+  if (body._ref) return `agent ${body._ref}`;
   if (body.query) return `“${body.query}”`;
   if (tool === "outline") return `${(body.examples ?? []).length} cells`;
   if (body.name) return String(body.name);
@@ -45,7 +46,8 @@ export default function WorkLog({ compact }: { compact?: boolean }) {
       }
       const copy = list.slice(); copy[idx] = next; return copy;
     }
-    return [{ id: e.id, tool: e.tool, origin: e.origin, phase: e.phase, t: e.t, repeats: 1, totalMs: 0,
+    return [{ id: e.id, tool: e.tool, origin: e.origin, phase: e.phase, env: e.env, error: e.error, t: e.t, repeats: 1,
+      totalMs: e.env?.wallMs ?? 0,
       summary: summarise(e.tool, e.body) }, ...list].slice(0, 80);
   })), []);
 
@@ -61,10 +63,12 @@ export default function WorkLog({ compact }: { compact?: boolean }) {
           <div className={`entry ${l.phase}`} key={l.id}>
             <button className="entry-head" onClick={() => setOpen((s) => { const n = new Set(s); n.has(l.id) ? n.delete(l.id) : n.add(l.id); return n; })}>
               <span className="tname">{l.tool}{l.repeats > 1 && <span className="rep"> ×{l.repeats}</span>}</span>
-              {l.origin === "agent" && <span className="tag mock">mock agent</span>}
+              {l.origin === "agent" && <span className="tag planner">rules planner</span>}
               {l.phase === "start" && <span className="tag running">running</span>}
               {l.phase === "error" && <span className="tag declined">error</span>}
               {env && <span className={`tag ${env.status}`}>{STATUS_TEXT[env.status]}</span>}
+              {env && <span className="tag envconf" title="envelope confidence (per-tool heuristic, explained in method)">
+                {env.confidence == null ? "conf —" : `conf ${env.confidence.toFixed(2)}`}</span>}
               <span className="ms">{l.phase === "start" ? "…" : `${l.repeats > 1 ? l.totalMs : env?.wallMs ?? 0} ms`}</span>
             </button>
             {l.summary && <div className="entry-sum">{l.summary}</div>}

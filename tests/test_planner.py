@@ -14,6 +14,16 @@ def test_required_requests_parse():
     assert (p.concept, p.place, p.layer, p.inside_layer) == ("swimming_pool", "Matthews", "fema_flood_zones", True)
 
 
+def test_people_requests_declined():
+    from groundtruth.tools import _people
+
+    for q in ("who owns the houses with pools in Ballantyne", "crime rates in Uptown", "who lives at 123 Main St",
+              "owner names of houses with solar"):
+        assert _people(q), q
+    for q in ("pools within 1 km of I-485 in Ballantyne", "solar on warehouses", "parking lots in Uptown"):
+        assert not _people(q), q
+
+
 def test_new_since_and_year():
     p = parse("new pools since 2020 in NoDa")
     assert p.new_since is None or p.new_since == 2020

@@ -5,6 +5,8 @@ import { AGENT_DEMO_PROMPT, DEFAULT_PLACES, EXAMPLE_QUERIES, matchPlace, parseQu
 
 /** Chip thumbnail with the matching 16.8 m cell outlined. */
 export function CellThumb({ f, size, big }: { f: Feature; size?: number; big?: boolean }) {
+  if (!f.properties.chip_bbox || !f.properties.cell_bbox)
+    return <div className={`cthumb empty ${big ? "big" : ""}`} style={size ? { width: size, height: size } : undefined} aria-hidden />;
   const [w, s, e, n] = f.properties.chip_bbox, [cw, cs, ce, cn] = f.properties.cell_bbox;
   const st = { left: `${((cw - w) / (e - w)) * 100}%`, top: `${((n - cn) / (n - s)) * 100}%`,
     width: `${((ce - cw) / (e - w)) * 100}%`, height: `${((cn - cs) / (n - s)) * 100}%` };
@@ -19,7 +21,7 @@ export function CellThumb({ f, size, big }: { f: Feature; size?: number; big?: b
 export function AskScreen(p: {
   query: string; setQuery: (s: string) => void; onAsk: (q: string) => void; busy: string | null; err: string | null;
   places: Record<string, Bbox>; placeSource: string; place: string | null; setPlace: (p: string | null) => void;
-  hl: Health | null; aoi: string; year: number; onBrowse: (place: string | null) => void; onAgent: () => void;
+  hl: Health | null; aoi: string; year: number; onBrowse: (place: string | null) => void; onAgent: (prompt: string) => void;
 }) {
   const [pq, setPq] = useState("");
   const names = Object.keys(p.places);
@@ -65,8 +67,8 @@ export function AskScreen(p: {
             {idx.length ? idx.map((i) => `${pretty(i.aoi)} (${i.chips.toLocaleString()} chips)`).join(" · ") : "loading…"} · NAIP {p.year}, 0.6 m
             {p.aoi && p.aoi !== "county" && <> — slice indexes only, so neighbourhoods outside them return nothing yet.</>}
           </div>
-          <button className="agent-link" onClick={p.onAgent}>
-            <span className="tag mock">MOCK agent stream</span> replay “{AGENT_DEMO_PROMPT}” →
+          <button className="agent-link" onClick={() => p.onAgent(AGENT_DEMO_PROMPT)}>
+            <span className="tag planner">rules planner</span> run “{AGENT_DEMO_PROMPT}” →
           </button>
           {p.placeSource && <div className="src">Places: {p.placeSource}</div>}
         </div>
@@ -86,12 +88,22 @@ export function PickScreen(p: {
         <button className="btn ghost" onClick={p.onBack}>← Back</button>
         <div>
           <h2>Which “{p.query}” do you mean?</h2>
-          <p className="hint">Select one or more tiles as examples. Mark the others “not this” — they become negatives. The highlighted square is the 17 m cell the match is about.</p>
+          <p className="hint">Select one or more tiles as examples. Every tile you don't pick becomes a negative (“not this”). The highlighted square is the 17 m cell the match is about.</p>
         </div>
       </div>
       <div className="tiles">
-        {p.cands.map((c) => {
+        {p.cands.map((c, i) => {
           const ex = c.properties.example as string;
+          if (c.properties.no_clear_example || !c.geometry) return (
+            <div key={ex ?? `nce-${i}`} className="tile no-clear" aria-disabled title="No clear example in the index — not selectable">
+              <div className="tile-img nce-img"><span>no clear example</span></div>
+              <div className="tile-meta">
+                <div>
+                  <div className="sense">{c.properties.sense_label ?? pretty(String(c.properties.sense_id ?? "sense"))}</div>
+                  <div className="hint small">{c.properties.reason ?? "no tile clearly shows this meaning"}</div>
+                </div>
+              </div>
+            </div>);
           const picked = p.picks.includes(ex), not = p.nots.includes(ex);
           return (
             <div key={ex} className={`tile ${picked ? "picked" : ""} ${not ? "not" : ""}`}

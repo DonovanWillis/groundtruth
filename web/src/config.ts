@@ -2,6 +2,10 @@ import type { Bbox } from "./api";
 
 export const EXAMPLE_QUERIES = ["find swimming pools", "parking lots in Uptown", "solar on warehouses"];
 export const AGENT_DEMO_PROMPT = "pools within 1 km of I-485 in Ballantyne";
+export const AGENT_CHIPS = [
+  "find swimming pools", "pools within 1 km of I-485 in Ballantyne", "parking lots in Uptown", "solar on warehouses",
+  "pools in flood zones in Matthews",
+];
 export const DEFAULT_PLACES = ["Ballantyne", "NoDa", "South End", "Myers Park", "Lake Norman", "University City", "Matthews", "Uptown"];
 
 export type LayerDef = { key: string; label: string; color: string; kind: "line" | "circle" | "fill"; bboxed?: boolean };

@@ -122,6 +122,8 @@ def run(engine_for, text: str) -> dict[str, Any]:
                 "planner": "rules planner (deterministic)"}
     ex = chosen["properties"]["example"]
     neg = [f["properties"]["example"] for f in tiles if f is not chosen]
+    plan.notes.append(f"example: sense '{chosen['properties']['sense_id']}' ({ex}); other senses used as negatives")
+    plan_extra = {"chosen_sense": chosen["properties"]["sense_id"], "chosen_example": ex, "negatives": neg}
     # 2. find all (exhaustive in a place; ranked county-wide otherwise)
     fa = eng.find_all([ex], neg, place=plan.place if eng.aoi == "county" else None, concept=plan.concept,
                       within_layer=plan.host_layer)  # "solar on warehouses": scan exactly the chips covering warehouses
@@ -150,7 +152,8 @@ def run(engine_for, text: str) -> dict[str, Any]:
                                concept=plan.concept)
         r_cy = step("compare_years", cy)
     # 5. measure + export
-    ms = eng.measure(current) if current["features"] else None
+    dist_layers = [plan.layer] if plan.layer and not plan.inside_layer else []
+    ms = eng.measure(current, to_layers=dist_layers) if current["features"] else None
     r_ms = step("measure", ms) if ms else None
     if r_ms:
         actions.append({"action": "show_metrics", "envelope_ref": r_ms})
@@ -173,6 +176,10 @@ def run(engine_for, text: str) -> dict[str, Any]:
             mm = cy_env["result"]["metrics"]
             parts.append(f"{mm.get('new', 0)} new since {plan.new_since}, {mm.get('existing', 0)} existing, "
                          f"{mm.get('unsure', 0)} unsure ({r_cy})")
+    if r_ms and dist_layers and ms.status != "declined":
+        md = ms.result.metrics.get(f"median_dist_m_to_{plan.layer}")
+        if md is not None:
+            parts.append(f"median {round(md)} m to {plan.layer.replace('osm_', '').upper()} ({r_ms})")
     actions.append({"action": "say", "text": "; ".join(parts) + "."})
-    return {"plan": plan.__dict__, "steps": steps, "actions": actions, "status": "ok",
+    return {"plan": {**plan.__dict__, **plan_extra}, "steps": steps, "actions": actions, "status": "ok",
             "planner": "rules planner (deterministic)"}

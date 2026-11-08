@@ -8,10 +8,10 @@ Index `chips224s192-g0.6-v3c8p192` · AOI `county` · NAIP 2022 · 107,770 chips
 
 | concept | labels T/L (in index) | search_text P@k (labels+OSM / labels) | find_all P@k, leave-one-out (labels+OSM / labels) | look-alike rejection (direct) | intended meaning in 6 picks | OSM recall, top 200 in place | outline IoU vs OSM (median, n) |
 |---|---|---|---|---|---|---|---|
-| swimming_pool | 52/7 (52/5) | 0.583 / 0.0 | 0.45 / 0.444 (20 queries) | 3/5 (0.6) | no | Ballantyne: 16/25 (0.64) | 0.293 (20) |
+| swimming_pool | 52/7 (52/5) | 0.583 / 0.0 | 0.496 / 0.487 (20 queries) | 2/5 (0.4) | no | Ballantyne: 14/25 (0.56) | 0.379 (14) |
 | construction_site | 0/0 (0/0) | 0.125 / 0.0 | – / – (0 queries) | – | no | – | – (0) |
 | warehouse | 0/0 (0/0) | 0.25 / 0.0 | – / – (0 queries) | – | yes | – | – (0) |
-| parking_lot | 7/0 (7/0) | 0.292 / 0.0 | 0.518 / 0.024 (7 queries) | – | yes | Uptown: 141/407 (0.346) | 0.091 (30) |
+| parking_lot | 7/0 (7/0) | 0.292 / 0.0 | 0.512 / 0.018 (7 queries) | – | yes | Uptown: 338/407 (0.83) | 0.095 (30) |
 | solar_installation | 0/0 (0/0) | 0.0 / 0.0 | – / – (0 queries) | – | no | – | – (0) |
 
 **Reading the numbers honestly**

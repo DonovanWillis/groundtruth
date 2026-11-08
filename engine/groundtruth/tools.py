@@ -28,8 +28,9 @@ from groundtruth.index import ChipIndex, view_cells
 from groundtruth.providers.base import DataProvider
 
 VERSION = "0.2.0"
-PEOPLE_TERMS = ("owner", "who lives", "resident", "income", "race", "ethnicity", "crime", "school rating",
-                "demographic", "home address of")
+PEOPLE_TERMS = ("owner", "who owns", " owns ", "owned by", "who lives", "lives at", "resident", "tenant", "occupant",
+                "income", "race", "ethnicity", "crime", "school rating", "demographic", "home address of",
+                "name of", "names of")
 NOT_IMPLEMENTED = "not_implemented"
 
 
@@ -324,12 +325,14 @@ class Engine:
             return self.index.salient_cell(int(idx[j]), view_cells(int(view), self.index.grid))
 
         def cell_colour(i: int, rule: dict[str, Any]) -> np.ndarray:
-            """(64,) best 14 px patch colour fraction inside each 16.8 m cell."""
-            from groundtruth.rerank import _cell_patches, colour_cached
+            """(64,) colour fraction per 16.8 m cell: best 14 px patch, or the mean over the cell when the concept sets
+            pick_colour_stat "mean" (solar: thin dark shadows along roof edges have a high max but a low mean)."""
+            from groundtruth.rerank import _cell_patches, colour_cached, concept_conf
 
             img = np.asarray(Image.open(io.BytesIO(self.index.thumb_jpeg(i))).convert("RGB"))
             cp = colour_cached((str(self.index.root), i), img, rule).reshape(-1)
-            return np.array([cp[_cell_patches(c, self.index.grid)].max() for c in range(self.index.n_cells)])
+            stat = np.mean if concept_conf(key).get("pick_colour_stat") == "mean" else np.max
+            return np.array([stat(cp[_cell_patches(c, self.index.grid)]) for c in range(self.index.n_cells)])
 
         def try_pick(order: Sequence[int], view_of, sense: dict[str, Any], score_of, limit: int = 60) -> bool:
             rule = sense_colour_rule(sense, key)

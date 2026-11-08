@@ -122,13 +122,16 @@ def main() -> None:
                 env = eng.find_all([f"{eng.index.ids[x['cell'][0]]}#{x['cell'][1]}"], k=k, bbox=bb, concept=c,
                                    rerank=True, outline_top=0)
                 fh = [(eng.index.pos[f["properties"]["chip_id"]], f["properties"]["cell"]) for f in env.result.geojson["features"]]
-                fh = [h for h in fh if h != tuple(x["cell"])]
-                ps.append(sum(is_pos(i, cc) for i, cc in fh) / k)
-                ps_lab.append(sum(is_pos(i, cc, True) for i, cc in fh) / k)
+                fh_all = [h for h in fh if h != tuple(x["cell"])]
+                fh = fh_all[:k]  # v0.4: features = every counted object, ranked → P@k over the top k
+                if not fh:
+                    continue
+                ps.append(sum(is_pos(i, cc) for i, cc in fh) / len(fh))
+                ps_lab.append(sum(is_pos(i, cc, True) for i, cc in fh) / len(fh))
                 bbm = to_measure(box(*bb))
                 near = [lc for lc in look_cells if bbm.intersects(box(*eng.index.cell_bounds_m(*lc)))]
                 look_near += len(near)
-                look_hit += sum(1 for i, cc in fh if is_look(i, cc))
+                look_hit += sum(1 for i, cc in fh_all if is_look(i, cc))
                 for f in env.result.geojson["features"]:
                     if f["properties"]["geometry_kind"] == "outline" and tree is not None:
                         g = to_measure(shape(f["geometry"]))
@@ -173,11 +176,12 @@ def main() -> None:
                 if lc:
                     ex_cells.append(f"{eng.index.ids[lc[0]]}#{lc[1]}")
             targets = [o for o in in_box if o not in mid]
-            env = eng.find_all(ex_cells, k=200, bbox=bb, concept=c, rerank=True, outline_top=0)
-            feats = env.result.geojson["features"]
+            env = eng.find_all(ex_cells, k=200, bbox=bb, concept=c, rerank=True, outline_top=500)
+            feats = env.result.geojson["features"]  # v0.4: the whole exhaustive, object-checked count
             cells = [to_measure(box(*f["properties"]["cell_bbox"])) for f in feats]
             found = sum(1 for o in targets if any(o.intersects(cb) for cb in cells))
             r["osm_recall_top200_in_place"] = {"place": place, "osm_objects": len(targets), "found": found,
+                                               "counted_objects": len(feats),
                                                "recall": round(found / len(targets), 3) if targets else None,
                                                "note": "recall over OSM-mapped objects only; OSM is incomplete"}
             # outline IoU vs OSM polygons for the top hits that overlap one
