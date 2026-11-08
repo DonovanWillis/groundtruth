@@ -16,10 +16,13 @@ Use a restrained warm neutral canvas, ink text, one muted geographic accent, cri
 
 ## Delivery sequence
 
+Worldwide navigation and coverage disclosure are now the immediate next increment. The three coordinated Claude roles and API contract are in `docs/LOCATION_SEARCH_HANDOFF.md` and `docs/LOCATION_SEARCH_CONTRACT.md`. MCP, persistence and Cesium work follow this increment; they should not compete for the same files now.
+
 | Stage | Work | Acceptance |
 |---|---|---|
 | 1. Map and conversation foundation | Persistent map, right Ask panel, responsive bottom panel, explicit address geocoding and drawn rectangle, linked result cards, session state, honest no-data follow-ups | No browser geolocation; no horizontal scroll at desktop/mobile widths; card and map selection agree; “near me” without area requests context; `npm run build`, API and engine tests pass |
 | 2. Provider-backed place answers | Search Overture places in selected area, stable IDs/order, distances measured in EPSG:32617, source/coverage display, menu/price provider interface | No fabricated attributes; unavailable data is explicit; results remain stable through follow-ups |
+| 2a. Worldwide navigation | Global basemap, configurable town/address geocoder, navigation/analysis coverage separation | A town outside North Carolina can be located and viewed; outside-area analysis declines with coverage explanation; no public Nominatim autocomplete |
 | 3. LLM planner | Mistral-compatible adapter behind validated plan schema; tool allowlist, source-aware response builder, session continuation and tests | Model cannot supply factual metrics absent from envelopes; invalid plans decline safely; deterministic fallback works when model is unavailable |
 | 4. Persistence and integration | PostgreSQL/PostGIS schema and migrations for sessions, areas, result references and sourced place metadata; optional Supabase deployment and authentication | Local app works without cloud credentials; server holds secrets; row access and data retention are documented; no imagery/FAISS files in Postgres |
 | 5. MCP and 3D | MCP server wrapping existing HTTP tools; optional CesiumJS view with licensed terrain/building sources and synchronized selected feature | MCP observes envelope contract; 2D stays usable; 3D says when height/terrain coverage is missing |

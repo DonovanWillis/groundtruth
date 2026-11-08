@@ -4,6 +4,7 @@ Times are local (America/New_York).
 
 | time | milestone |
 |---|---|
+| 2026-11-08 04:26 | Scoped worldwide location search after user review: navigation and analysis coverage separated, public Nominatim policy checked, global basemap and geocoder provider planned, and three Claude roles redirected to one sequential handoff contract. See `docs/LOCATION_SEARCH_CONTRACT.md` and `docs/LOCATION_SEARCH_HANDOFF.md`. |
 | 2026-11-08 04:23 | Ask Maps Stage 1 UI: map stays visible, explicit address/drawn area, responsive Ask panel, numbered Overture place cards linked to map markers, and sourced follow-ups. Browser checked 50 Ballantyne restaurants; menu/price prompts correctly report missing source data. Vite build and 390/1440 px overflow checks passed. Legacy demo remains at `?legacy=1`. |
 | 2026-11-08 04:21 | Ask Maps foundation branch: wrote staged plan, added provider-owned address geocoding through public OSM Nominatim (explicit user entry only, county filtered, cached), fetched Overture places/buildings outside Git, verified a Ballantyne restaurant query and 32 Python tests. UI and MCP work are in progress in separate paths. |
 | 2026-11-08 03:53 | Added conversation handoff for Donovan's fork: future Ask ORYN product decisions, current Mac-only setup scope, verified local progress, and remaining work. See `docs/CONVERSATION_CONTEXT.md`. |
