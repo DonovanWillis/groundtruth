@@ -4,6 +4,7 @@ Times are local (America/New_York).
 
 | time | milestone |
 |---|---|
+| 2026-11-07 22:28 | Master queue progress: Phase 1 done (local COGs 2022 county + 2020 places, PMTiles, DuckDB), Phase 2 dense (Ballantyne OSM recall 15/25 → 20/25, top-50 ~49/50; 4 of 8 places built, rest building), Phase 4 open vocabulary (48 → 53/108 eye-checked), Phase 5 places + Valhalla, Phase 6 lidar (Uptown, Ballantyne, Myers Park). Background wait reaped for low memory; airport lidar build stopped (two heavy jobs ran at once: my mistake). Not pushed: API down, demo_check pending. *(free: WSL RAM 14,377 MB · VRAM used 2858 MiB, 8188 MiB · disk C: 78 GB)* |
 | 2026-11-07 20:44 | Master queue Phase 0 (licence gate → docs/LICENCE_GATE.md) + Phase 1.4 (landing chips = 4 measured pool requests; solar/parking EXPERIMENTAL limit; warm-up of 8 places + chips; scan cache + envelope memo: landing chips 77–163 ms warm, Matthews 1.4 s). demo_check PASS cold + warm. Tag demo-stable-v2. *(free: WSL RAM 16,692 MB · VRAM used 4915 MiB, 8188 MiB · disk C: 79 GB)* |
 | 2026-11-07 14:09 | Start. Repo foundation: MIT licence, CLAUDE.md rules, envelope + DataProvider interface, docs skeleton. |
 | 2026-11-07 14:12 | Mecklenburg boundary fetched (Census TIGERweb, 1,413.18 km²). NAIP coverage check on Planetary Computer: full-county years 2022, 2020, 2018, 2016, 2014, 2012 → primary 2022, secondary 2020 (both 0.6 m). |

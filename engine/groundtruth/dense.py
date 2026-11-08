@@ -212,11 +212,31 @@ class DenseSet:
     def match(self, P: np.ndarray, N: np.ndarray | None, qp: np.ndarray, det: dict[str, Any]) -> list[int]:
         """Indices of proposals that pass the verifier and match the examples (same rule as the standard scan)."""
         S = self.tokens @ qp
-        m = self.passed & (self.colour >= det.get("colour_min", 0)) & (S >= det.get("sim_min", det.get("score_min", 0)))
+        from groundtruth.rerank import concept_conf
+
+        cc = concept_conf(self.meta["concept"])
+        dc = cc.get("dense", {})  # current config (not the build-time copy)
+        passed = self.passed_with({**cc.get("object_check", {}), **dc.get("object_check", {})})
+        m = passed & (S >= float(dc.get("sim_min", det.get("sim_min", det.get("score_min", 0)))))
+        if dc.get("require_patch_colour", False):  # proposals are colour blobs already; the patch fraction of a small
+            m &= self.colour >= det.get("colour_min", 0)  # pool is ~0.1, so this check is off by default
         if N is not None:
             m &= (self.tokens @ P.T).max(1) > (self.tokens @ N.T).max(1) + det.get("neg_margin", 0.0)
         idx = np.nonzero(m)[0]
         return sorted(idx.tolist(), key=lambda k: (-float(S[k]), k))
+
+    def passed_with(self, oc: dict[str, Any]) -> np.ndarray:
+        """Re-apply the object check with (possibly different) thresholds from the stored per-proposal measurements."""
+        lo, hi = oc.get("area_m2", [0, 1e12])
+        out = np.zeros(len(self.feats), bool)
+        for k, f in enumerate(self.feats):
+            c = f["properties"]["object_check"]
+            if f.get("geometry") is None or "area_m2" not in c:
+                continue
+            out[k] = (lo <= c["area_m2"] <= hi and c["compactness"] >= oc.get("compactness_min", 0)
+                      and c["colour_frac"] >= oc.get("colour_frac_min", 0)
+                      and c["colour_area_m2"] >= oc.get("colour_area_min_m2", 0))
+        return out
 
     def sims(self, qp: np.ndarray) -> np.ndarray:
         return self.tokens @ qp

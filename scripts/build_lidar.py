@@ -147,7 +147,10 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("places", nargs="*")
     ap.add_argument("--max-depth", type=int, default=9)
+    ap.add_argument("--area", nargs=5, metavar=("NAME", "W", "S", "E", "N"), help="extra named area (not a demo place)")
     a = ap.parse_args()
     places = json.loads((config.SENSES_PATH.parent / "places.json").read_text())["places"]
-    for pl in a.places or list(places):
+    if a.area:
+        build(a.area[0], [float(v) for v in a.area[1:]], a.max_depth, log=lambda s: print(s, flush=True))
+    for pl in a.places or ([] if a.area else list(places)):
         build(pl, places[pl]["bbox"], a.max_depth, log=lambda s: print(s, flush=True))

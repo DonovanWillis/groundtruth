@@ -109,6 +109,13 @@ def parse(text: str) -> Plan:
         if lay:
             p.within_m, p.layer = 500.0, lay
             p.notes.append("'near' read as within 500 m")
+        else:  # near a named place / landmark / category → within a 5-minute drive (conf: near_minutes)
+            nm = re.search(r"\bnear (?:the nearest |a |an |any )?(.+?)(?= in [a-z ]+ $| $)", t)
+            if nm:
+                p.minutes, p.mode = float(_conf_pc().get("near_minutes", 5)), "drive"
+                p.origin = nm.group(1).strip()
+                origin_span = nm.span()
+                p.notes.append(f"'near {p.origin}' read as within a {p.minutes:g} minute drive")
     if re.search(r"\bin (a |the )?flood ?(zones?|plain)", t):
         p.layer, p.inside_layer, p.within_m = "fema_flood_zones", True, None
     hm = re.search(r"\bon (warehouses?)\b", t)
@@ -137,6 +144,10 @@ def parse(text: str) -> Plan:
         core = re.sub(rf"\b(in|around|near) {re.escape(p.place.lower())}\b", " ", core)
         core = core.replace(p.place.lower(), " ")
     core = re.sub(FILLER, "", re.sub(r"\s+", " ", core).strip()).strip()
+    if re.search(r"\b(how tall|how high|height|canopy|cover)\b.*\btrees?\b|\btrees?\b.*\b(tall|height|canopy|cover)\b|"
+                 r"\btree (canopy|height|cover)\b", core):
+        p.target_kind, p.target = "canopy", "trees"
+        return p
     senses = load_senses()
     best = None
     for key, entry in senses.items():
@@ -149,7 +160,7 @@ def parse(text: str) -> Plan:
     if best and not (bkind and p.min_height_m is not None and best[0] == "warehouse"):
         p.target_kind, p.target, p.concept, p.concept_query = "concept", best[0], best[0], best[1]
         if best[0] == "warehouse" and p.min_height_m is not None:
-            p.target_kind, p.target = "buildings", "building"
+            p.target_kind, p.target = "buildings", "warehouse"
         return p
     cat = next((k for k, v in pc["categories"].items() if any(re.search(rf"\b{re.escape(w)}\b", core) for w in v["words"])), None)
     if bkind:
@@ -192,6 +203,19 @@ def run(engine_for, text: str) -> dict[str, Any]:
     if plan.place:
         actions.append({"action": "fly_to", "bbox": bbox, "label": plan.place})
     r_cur, current, r_fa, what = None, None, None, plan.target
+    if plan.target_kind == "canopy":
+        cv = eng.canopy(place=plan.place, bbox=bbox)
+        r_cv = step("canopy", cv)
+        if cv.status == "declined":
+            actions.append({"action": "say", "text": f"I can't answer that here: {cv.declined_reason} ({r_cv})."})
+            return done("partial")
+        mm = cv.result.metrics
+        actions.append({"action": "show_metrics", "envelope_ref": r_cv})
+        actions.append({"action": "say", "text": f"Trees{' in ' + plan.place if plan.place else ''}: median "
+                                                 f"{mm['tree_height_m_median']} m, 90th percentile {mm['tree_height_m_p90']} m, "
+                                                 f"tallest {mm['tree_height_m_max']} m; canopy covers {mm['canopy_cover_pct']}% "
+                                                 f"of the non-building land (lidar 2016) ({r_cv})."})
+        return done("ok")
     # ---- 1. the target set
     if plan.target_kind == "concept":
         pc = eng.pick_candidates(plan.concept_query or plan.concept.replace("_", " "))

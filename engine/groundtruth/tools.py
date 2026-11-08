@@ -25,7 +25,7 @@ from PIL import Image
 from shapely.geometry import box, mapping, shape
 
 from groundtruth import config
-from groundtruth.envelope import Envelope, Result, StepTimer, declined, feature_collection
+from groundtruth.envelope import Envelope, Result, Source, StepTimer, declined, feature_collection
 from groundtruth.geo import SQM_PER_ACRE, length_m, to_measure, to_wgs84
 from groundtruth.index import ChipIndex, view_cells
 from groundtruth.providers.base import DataProvider
@@ -1336,7 +1336,14 @@ class Engine:
                 geoms[l] = self._layer_geom(l, near=feats)
         out, areas = [], []
         dists: dict[str, list[float]] = {l: [] for l in layers}
-        with t.step("measure", f"{len(feats)} features in EPSG:32617"):
+        from shapely.ops import unary_union
+
+        from groundtruth import lidar
+
+        fb = unary_union([shape(f["geometry"]) for f in feats]).bounds
+        lidar_place = lidar.place_for(fb)
+        heights: list[float] = []
+        with t.step("measure", f"{len(feats)} features in EPSG:32617" + (f" + lidar heights ({lidar_place})" if lidar_place else "")):
             for f in feats:
                 g = shape(f["geometry"])
                 gm = to_measure(g)
@@ -1344,6 +1351,11 @@ class Engine:
                 p["area_m2"] = round(gm.area, 2)
                 p["area_acres"] = round(gm.area / SQM_PER_ACRE, 5)
                 p["perimeter_m"] = round(gm.length if gm.geom_type in ("Polygon", "MultiPolygon") else length_m(g), 2)
+                if lidar_place and gm.geom_type in ("Polygon", "MultiPolygon"):
+                    hs = lidar.height_stats(gm, lidar_place)
+                    if hs:
+                        p.update(hs)
+                        heights.append(hs["height_m"])
                 for l, lg in geoms.items():
                     if lg is not None:
                         d = round(gm.distance(lg), 1)
@@ -1358,11 +1370,18 @@ class Engine:
             if ds:
                 metrics[f"min_dist_m_to_{l}"] = min(ds)
                 metrics[f"median_dist_m_to_{l}"] = round(float(np.median(ds)), 1)
+        lim = ["UTM 17N distortion < 0.1% in Mecklenburg",
+               "Distances are to the simplified web build of a layer when one exists (~3 m)"]
+        if heights:
+            metrics.update(median_height_m=round(float(np.median(heights)), 2), max_height_m=round(max(heights), 2),
+                           heights_from="USGS 3DEP lidar 2016 (nDSM, 1 m)")
+            lim.append("Heights: 90th percentile of lidar height-above-ground inside each outline (3DEP 2016: anything "
+                       "built or grown since then is not reflected); volume_m3 = Σ height × 1 m²")
         return self._env(tool, status="ok", result=Result(geojson=feature_collection(out), metrics=metrics),
-                         confidence=1.0, method="Planar measurement after reprojection EPSG:4326 → EPSG:32617 (UTM 17N)",
+                         confidence=1.0, method="Planar measurement after reprojection EPSG:4326 → EPSG:32617 (UTM 17N)"
+                         + ("; height/volume from the lidar nDSM" if heights else ""),
                          assumptions=["Input geometry is EPSG:4326"],
-                         limits=["UTM 17N distortion < 0.1% in Mecklenburg",
-                                 "Distances are to the simplified web build of a layer when one exists (~3 m)"],
+                         limits=lim,
                          sources=[s for l in layers for s in (self.provider.source_for(
                              {"osm": "openstreetmap"}.get(l.split("_")[0], l.split("_")[0])))], steps=t.steps)
 
@@ -1642,6 +1661,46 @@ class Engine:
                 out[p.get("id")] = {"height_m": float(p["height"]), "source": "overture"}
         return out
 
+    def canopy(self, place: str | None = None, bbox: Sequence[float] | None = None, min_tree_m: float = 2.5) -> Envelope:
+        """Tree canopy from lidar: cells with height-above-ground ≥ min_tree_m that are not under an Overture building.
+        → cover %, tree-height percentiles. Needs a lidar build for the place."""
+        tool = "canopy"
+        from rasterio.features import rasterize
+
+        from groundtruth import lidar
+        from groundtruth.vector import store
+
+        if place and not bbox:
+            bbox = self.place_bbox(place)
+        lp = lidar.place_for(bbox)
+        if lp is None:
+            return declined(tool, VERSION, f"no lidar built for this area yet (built: {lidar.built_places()})")
+        t = StepTimer()
+        with t.step("canopy", f"nDSM ≥ {min_tree_m} m outside Overture buildings ({lp})"):
+            arr, tr = lidar.array(lp)
+            fc, _ = store().buildings(bbox)
+            bmask = rasterize([to_measure(shape(f["geometry"])).buffer(1.5) for f in fc["features"]], out_shape=arr.shape,
+                              transform=tr) > 0 if fc["features"] else np.zeros(arr.shape, bool)
+            valid = np.isfinite(arr) & (arr > -9000)
+            trees = valid & ~bmask & (arr >= min_tree_m)
+            h = arr[trees]
+            land = valid & ~bmask
+        cover = float(trees.sum() / max(land.sum(), 1))
+        metrics = {"place": lp, "canopy_cover_pct": round(100 * cover, 1), "canopy_area_acres": round(trees.sum() / SQM_PER_ACRE, 1),
+                   "tree_height_m_median": round(float(np.median(h)), 1) if len(h) else None,
+                   "tree_height_m_p90": round(float(np.percentile(h, 90)), 1) if len(h) else None,
+                   "tree_height_m_max": round(float(h.max()), 1) if len(h) else None, "min_tree_m": min_tree_m}
+        meta = json.loads((config.DATA / "lidar" / lp.replace(" ", "_") / "meta.json").read_text())
+        return self._env(tool, status="ok", result=Result(geojson=feature_collection([]), metrics=metrics),
+                         confidence=0.8,
+                         method=f"USGS 3DEP lidar nDSM at 1 m: canopy = height ≥ {min_tree_m} m, excluding Overture building "
+                                "footprints (+1.5 m); heights are per 1 m cell (not per tree)",
+                         limits=["Lidar acquired 2016: growth and removals since are not reflected",
+                                 "Tall non-building structures (towers, power lines) count as canopy",
+                                 "Per-cell heights, not individual trees; confidence is a fixed heuristic"],
+                         sources=[Source(name=f"USGS 3DEP {meta['project']}", url=meta["source"],
+                                         date=meta["acquired"], licence=meta["licence"])], steps=t.steps)
+
     def find_buildings(self, kind: str = "building", bbox: Sequence[float] | None = None, place: str | None = None,
                        limit: int = 20000, min_height_m: float | None = None) -> Envelope:
         """Overture building footprints in a place/bbox, optionally by kind (conf/places_categories.json buildings)."""
@@ -1656,8 +1715,14 @@ class Engine:
             return declined(tool, VERSION, f"unknown building kind {kind!r}")
         classes = pc["buildings"][k]["classes"]
         t = StepTimer()
-        with t.step("query", f"DuckDB spatial: buildings{' class in ' + str(classes) if classes else ''}"):
-            fc, ms = store().buildings(bbox, classes, limit=limit)
+        layer = pc["buildings"][k].get("layer")
+        with t.step("query", f"layer {layer}" if layer else f"DuckDB spatial: buildings{' class in ' + str(classes) if classes else ''}"):
+            if layer:  # footprints from a reference layer (e.g. OSM warehouses), ids = layer feature index
+                lf = self.provider.get_layer(layer, tuple(bbox) if bbox else None)
+                fc = {"features": [{**f, "properties": {**(f.get("properties") or {}), "id": f.get("id") or f"{layer}:{n}",
+                                                        "class": k}} for n, f in enumerate(lf["features"])][:limit]}
+            else:
+                fc, ms = store().buildings(bbox, classes, limit=limit)
         feats = []
         from groundtruth import lidar
 

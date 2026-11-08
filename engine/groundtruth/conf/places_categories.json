@@ -18,7 +18,7 @@
     "house": {"words": ["house", "houses", "home", "homes"], "classes": ["house", "detached", "semidetached_house", "terrace", "residential", "bungalow"]},
     "apartment": {"words": ["apartment", "apartments", "apartment building", "apartment buildings"], "classes": ["apartments"]},
     "building": {"words": ["building", "buildings"], "classes": []},
-    "warehouse": {"words": ["warehouse building", "warehouse buildings"], "classes": ["warehouse"]}
+    "warehouse": {"words": ["warehouse building", "warehouse buildings", "warehouse", "warehouses"], "classes": ["warehouse"], "layer": "osm_warehouses"}
   },
   "buildings_class_coverage_note": "Overture building class is set for ~35% of county buildings (137,774 of 393,968); class-based counts (e.g. houses) miss unclassified buildings.",
   "modes": {"drive": "auto", "driving": "auto", "car": "auto", "walk": "pedestrian", "walking": "pedestrian", "foot": "pedestrian", "bike": "bicycle", "cycling": "bicycle", "bicycle": "bicycle"}

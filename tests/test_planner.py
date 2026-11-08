@@ -50,3 +50,13 @@ def test_new_since_and_year():
     assert (p.concept, p.place, p.new_since, p.year) == ("swimming_pool", "Ballantyne", 2020, None)
     p = parse("pools new since 2020 in NoDa")
     assert p.new_since == 2020 and p.place == "NoDa"
+
+
+def test_phase6_phrases_parse():
+    p = parse("how tall are the trees in Myers Park")
+    assert (p.target_kind, p.place) == ("canopy", "Myers Park")
+    p = parse("warehouses over 10 m tall near the airport")
+    assert (p.target_kind, p.target, p.min_height_m, p.minutes, p.origin) == ("buildings", "warehouse", 10.0, 5.0,
+                                                                              "the airport")
+    p = parse("solar on warehouses")
+    assert (p.target_kind, p.concept, p.host_layer) == ("concept", "solar_installation", "osm_warehouses")

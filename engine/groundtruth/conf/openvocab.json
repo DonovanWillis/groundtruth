@@ -3,7 +3,7 @@
   "detector": "IDEA-Research/grounding-dino-tiny",
   "detector_licence": "Apache-2.0 (see docs/LICENCE_GATE.md; training lineage note)",
   "top_k_chips": 500,
-  "place_max_chips": 1500,
+  "place_max_chips": 500,
   "batch": 4,
   "box_threshold": 0.3,
   "text_threshold": 0.25,
@@ -28,5 +28,6 @@
     "school bus lot": {"prompt": "parked yellow school buses", "area_m2": [200, 30000]},
     "baseball diamond": {"prompt": "baseball diamond", "area_m2": [400, 15000]}
   },
-  "eye_precision": {}
+  "eye_precision_doc": "Eye-checked right-out-of-12 (top 12, county-wide CLIP top 500 chips), 2026-11-07, with clip_verify + clip_mask_to_box (run B). Baseline run A without them: tennis 4, basketball 2, golf 6, cemetery 1, water tower 4, crane 4, bus lot 9, baseball 6, boat dock 12, trampoline 0 (48/108 on the 9 re-run); B = 53/108. Sheets: data/out/openvocab_*_base.png vs *_B.png.",
+  "eye_precision": {"tennis court": 5, "trampoline": 0, "boat dock": 12, "basketball court": 3, "golf green": 6, "cemetery": 1, "water tower": 3, "construction crane": 6, "school bus lot": 11, "baseball diamond": 6}
 }

@@ -38,3 +38,35 @@
 5. `pick_candidates` clusters the top 200 into 6 groups (k-means on DINOv2 vectors), one representative each,
    so the user can say which meaning they intended.
 6. `find_similar` uses DINOv2: mean(positives) − λ·mean(negatives) → top-k, excluding already-judged chips.
+
+## Model cascade (master build queue, v0.5)
+```
+ text ──► senses.json concept? ──yes──► pick_candidates (OpenCLIP senses, colour-checked tiles)
+   │                                     └► find_all: DINOv2 cells → colour prefilter → DINOv2 patches + concept colour
+   │                                          → components → dedupe → SAM 2.1 outline → object check (area/compact/colour)
+   │                                          └► DENSE (8 places): colour blobs in centred windows → DINOv2 token + SAM 2.1
+   │                                               + same verifier (precomputed) → matched to examples → merged
+   ├─ place category? ──► find_place (Overture places, DuckDB spatial)
+   ├─ building kind? ───► find_buildings (Overture footprints, DuckDB) + heights (lidar nDSM ▸ Overture)
+   └─ else ─────────────► find_anything: OpenCLIP chip ranking → Grounding DINO boxes → CLIP crop verifier
+                              → SAM 2.1 mask (clipped to box) → area check → dedupe
+ constraints: filter (distance to layers · inside layers · travel time via Valhalla isochrones · min height)
+```
+
+## Environments (each heavy dependency pinned in its own env when it could conflict)
+| env | path | what | used by |
+|---|---|---|---|
+| CPU main | `~/.venvs/groundtruth` | engine + API (torch CPU), duckdb 2.0, pmtiles, titiler.core/rio-tiler, pyvalhalla, laspy+lazrs | tests, scripts, lidar build |
+| GPU main | `~/.venvs/groundtruth-gpu` | same + torch cu126 | API (`GROUNDTRUTH_GPU=1`), precompute, dense, open-vocab pre-test |
+| routing | `~/.venvs/gt-routing` | pyvalhalla 3.9 + pyosmium (graph build only) | `scripts/build_routing.py` |
+| browser | `~/.venvs/gt-browser` | Playwright (headless Chromium) | `scripts/ui_bench.py` |
+| system | apt | tippecanoe 2.49 | `scripts/build_pmtiles.py` |
+
+## Local data (all under `data/`, gitignored; rebuilt by scripts)
+| path | built by | notes |
+|---|---|---|
+| `~/.cache/groundtruth/naip/<year>/` | `scripts/fetch_cogs.py` | NAIP COGs: 2022 county (56 scenes, 23.9 GB), 2020 for the 8 places (43, 20.5 GB) |
+| `data/tiles/*.pmtiles` | `scripts/build_pmtiles.py` | vector tiles for context layers (`conf/vector_tiles.json`) |
+| `data/routing/` | `scripts/build_routing.py` | OSM roads clipped to county + 5 km, Valhalla tiles (121 MB) |
+| `data/dense/<place>/` | `scripts/dense_build.py` | dense proposals (tokens, outlines, verifier) |
+| `data/lidar/<place>/` | `scripts/build_lidar.py` | DTM / DSM / nDSM at 1 m (3DEP 2016) |
