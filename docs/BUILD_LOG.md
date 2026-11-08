@@ -4,6 +4,7 @@ Times are local (America/New_York).
 
 | time | milestone |
 |---|---|
+| 2026-11-07 20:44 | Master queue Phase 0 (licence gate → docs/LICENCE_GATE.md) + Phase 1.4 (landing chips = 4 measured pool requests; solar/parking EXPERIMENTAL limit; warm-up of 8 places + chips; scan cache + envelope memo: landing chips 77–163 ms warm, Matthews 1.4 s). demo_check PASS cold + warm. Tag demo-stable-v2. *(free: WSL RAM 16,692 MB · VRAM used 4915 MiB, 8188 MiB · disk C: 79 GB)* |
 | 2026-11-07 14:09 | Start. Repo foundation: MIT licence, CLAUDE.md rules, envelope + DataProvider interface, docs skeleton. |
 | 2026-11-07 14:12 | Mecklenburg boundary fetched (Census TIGERweb, 1,413.18 km²). NAIP coverage check on Planetary Computer: full-county years 2022, 2020, 2018, 2016, 2014, 2012 → primary 2022, secondary 2020 (both 0.6 m). |
 | 2026-11-07 14:34 | Working slice: UNC Charlotte AOI, 342 chips (NAIP 2022, 2 scenes), DINOv2 + OpenCLIP + FAISS. CPU throughput 4.4 chips/s (8 threads). Remote windowed COG reads were 265 s per AOI, so we switched to a whole-scene download (~10 MB/s with 16 streams). |
@@ -28,4 +29,3 @@ Times are local (America/New_York).
 | 2026-11-07 15:20 | **Storage format locked (v2):** DINOv2 4×4 patch-cell grid (N,16,768) fp16 + whole-chip OpenCLIP (N,1,512) fp16. CLIP 2×2 sub-crops cost 2.6× embed time and added 0 clear pools in the A/B (6 vs 6 of 24), so they are dropped everywhere. Engine v0.2: sub-cell find_similar, sense-prompt pick_candidates, refine, measure, filter, export. FEMA NFHL: 34,704 polygons. |
 | 2026-11-07 14:38 | Overture 2026-10-21.0 clipped to the county via DuckDB: 79,385 places, 393,968 buildings (98% OSM-sourced). The OSM/FEMA pass was stopped by host memory pressure; still to do. Evaluation hook runs (0 labels so far). Full-county precompute estimated at ~7 h/year on CPU, so it was **not started here**; see docs/PRECOMPUTE.md. |
 | 2026-11-07 14:30 | Labelling page live at http://localhost:8765/label: NAIP 2022 tiles (cached PC mosaic proxy), 5 concepts, T/L/U/1–5 keys, OSM place search, journal + atomic snapshot + backup on every click, CSV/GeoJSON export. LabelStore tests pass (5). |
-|  | Master queue Phase 0 (licence gate → docs/LICENCE_GATE.md) + Phase 1.4 (landing chips = 4 measured pool requests; solar/parking EXPERIMENTAL limit; warm-up of 8 places + chips; scan cache + envelope memo: landing chips 77–163 ms warm, Matthews 1.4 s). demo_check PASS cold + warm. Free:  MB WSL, disk C: . |
