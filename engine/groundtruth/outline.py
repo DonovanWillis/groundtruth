@@ -43,13 +43,15 @@ class Outliner:
     _lock = threading.Lock()
 
     @staticmethod
-    def _cache_path(chip_id: str, cell: int):
-        return config.DATA / "cache" / "outlines" / config.INDEX_VERSION / f"{chip_id}_{cell}.json"
+    def _cache_path(chip_id: str, cell: int, patch: int | None = None):
+        tail = f"_p{patch}" if patch is not None else ""
+        return config.DATA / "cache" / "outlines" / config.INDEX_VERSION / f"{chip_id}_{cell}{tail}.json"
 
-    def outline(self, index: ChipIndex, i: int, cell: int, margin_px: int = 8) -> dict[str, Any]:
-        """→ GeoJSON Feature (EPSG:4326) with area_m2/area_acres/sam_score/ms/cached. Thread-safe."""
+    def outline(self, index: ChipIndex, i: int, cell: int, margin_px: int = 8, patch: int | None = None) -> dict[str, Any]:
+        """→ GeoJSON Feature (EPSG:4326) with area_m2/area_acres/sam_score/ms/cached. Thread-safe.
+        With ``patch`` (0–255, 14 px / 8.4 m), the prompt is that patch's centre + its box ± 12 px (finer than the cell)."""
         chip_id = index.ids[i]
-        cp = self._cache_path(chip_id, cell)
+        cp = self._cache_path(chip_id, cell, patch)
         if cp.exists():
             f = json.loads(cp.read_text())
             f["properties"]["cached"] = True
@@ -58,9 +60,10 @@ class Outliner:
             if cp.exists():
                 f = json.loads(cp.read_text()); f["properties"]["cached"] = True
                 return f
-            return self._outline_uncached(index, i, cell, margin_px, cp)
+            return self._outline_uncached(index, i, cell, margin_px, cp, patch)
 
-    def _outline_uncached(self, index: ChipIndex, i: int, cell: int, margin_px: int, cp) -> dict[str, Any]:
+    def _outline_uncached(self, index: ChipIndex, i: int, cell: int, margin_px: int, cp,
+                          patch: int | None = None) -> dict[str, Any]:
         chip_id = index.ids[i]
         import torch
         from PIL import Image
@@ -74,6 +77,13 @@ class Outliner:
         box = [max(0, c * px - m), max(0, r * px - m), min(config.CHIP_PX, (c + 1) * px + m),
                min(config.CHIP_PX, (r + 1) * px + m)]
         point = [c * px + px / 2, r * px + px / 2]
+        if patch is not None:
+            pp = config.CHIP_PX // 16
+            pr, pc = divmod(int(patch), 16)
+            m = 12
+            box = [max(0, pc * pp - m), max(0, pr * pp - m), min(config.CHIP_PX, (pc + 1) * pp + m),
+                   min(config.CHIP_PX, (pr + 1) * pp + m)]
+            point = [pc * pp + pp / 2, pr * pp + pp / 2]
         proc, model = self._model
         inputs = proc(images=img, input_boxes=[[box]], input_points=[[[point]]], input_labels=[[[1]]],
                       return_tensors="pt").to(self.device)
@@ -91,21 +101,28 @@ class Outliner:
         tr = from_origin(x0, y0 + config.CHIP_M, config.GSD_M, config.GSD_M)
         polys = [shape(geom) for geom, v in rfeatures.shapes(mask.astype(np.uint8), mask=mask, transform=tr) if v == 1]
         ms = round((time.perf_counter() - t0) * 1000, 1)
-        props: dict[str, Any] = {"chip_id": chip_id, "cell": int(cell), "example": f"{chip_id}#{cell}",
+        ex_id = f"{chip_id}#{cell}" + (f":{patch}" if patch is not None else "")
+        props: dict[str, Any] = {"chip_id": chip_id, "cell": int(cell), "example": ex_id, "patch": patch,
                                  "sam_score": round(score, 4), "model": SAM_ID, "ms": ms, "cached": False}
         if not polys:
-            feat = {"type": "Feature", "id": f"{chip_id}#{cell}", "geometry": None,
+            feat = {"type": "Feature", "id": ex_id, "geometry": None,
                     "properties": {**props, "area_m2": 0.0, "area_acres": 0.0, "empty": True}}
         else:
-            # keep the component overlapping the prompt cell most
+            # keep the component containing / overlapping the prompt most
+            from shapely.geometry import Point
             from shapely.geometry import box as sbox
 
-            cx0, cy1 = x0 + c * px * config.GSD_M, y0 + config.CHIP_M - r * px * config.GSD_M
-            cellbox = sbox(cx0, cy1 - px * config.GSD_M, cx0 + px * config.GSD_M, cy1)
-            best = max(polys, key=lambda p: (p.intersection(cellbox).area, p.area)).simplify(0.3)
+            bx0, by0, bx1, by1 = box
+            pbox = sbox(x0 + bx0 * config.GSD_M, y0 + config.CHIP_M - by1 * config.GSD_M,
+                        x0 + bx1 * config.GSD_M, y0 + config.CHIP_M - by0 * config.GSD_M)
+            ppt = Point(x0 + point[0] * config.GSD_M, y0 + config.CHIP_M - point[1] * config.GSD_M)
+            best = max(polys, key=lambda p: (p.contains(ppt), p.intersection(pbox).area, p.area)).simplify(0.3)
             area = best.area
-            feat = {"type": "Feature", "id": f"{chip_id}#{cell}", "geometry": mapping(to_wgs84(best)),
-                    "properties": {**props, "area_m2": round(area, 2), "area_acres": round(area / SQM_PER_ACRE, 5)}}
+            per = best.length
+            feat = {"type": "Feature", "id": ex_id, "geometry": mapping(to_wgs84(best)),
+                    "properties": {**props, "area_m2": round(area, 2), "area_acres": round(area / SQM_PER_ACRE, 5),
+                                   "perimeter_m": round(per, 2),
+                                   "compactness": round(4 * np.pi * area / max(per * per, 1e-9), 3)}}
         cp.parent.mkdir(parents=True, exist_ok=True)
         tmp = cp.with_suffix(".tmp")
         tmp.write_text(json.dumps(feat))

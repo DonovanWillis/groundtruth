@@ -1,12 +1,18 @@
 {
   "_doc": "Per-concept settings (no code changes needed). rerank.colour: HSV range (H in degrees 0-360, S and V 0-255) whose pixel fraction per 14 px patch is blended into the re-rank score with rerank.colour_weight; patch_weight scales DINOv2 patch similarity. count_conf: confidence threshold for counting a result as a detected object.",
   "_default": {"rerank": {"patch_weight": 1.0, "colour_weight": 0.0, "colour": null, "pool": 400}, "count_conf": 0.5,
+               "detect": {"prefilter_sim": 0.5, "score_min": 0.7, "colour_min": 0.0, "nms_m": 20, "neg_margin": 0.0},
+               "object_check": {"area_m2": [20, 200000], "compactness_min": 0.0, "colour_frac_min": 0.0},
                "change": {"colour_now_min": 0.15, "colour_then_keep": 0.5,
                           "sim_new_max": 0.6, "sim_existing_min": 0.72,
                           "_doc": "Cross-year cell similarity is the primary signal (radiometry differs between NAIP years, so colour then is only supporting evidence). new = colour now >= colour_now_min AND sim <= sim_new_max; existing = sim >= sim_existing_min OR colour then >= colour_then_keep x colour now; else unsure."}},
   "swimming_pool": {
-    "rerank": {"patch_weight": 0.6, "colour_weight": 0.4, "colour": {"hsv_lo": [165, 50, 100], "hsv_hi": [210, 255, 255]}, "pool": 400},
-    "count_conf": 0.5
+    "rerank": {"patch_weight": 0.6, "colour_weight": 0.4, "colour": {"hsv_lo": [170, 80, 110], "hsv_hi": [205, 255, 255]}, "pool": 400},
+    "count_conf": 0.5,
+    "detect": {"prefilter_sim": 0.45, "score_min": 0.62, "colour_min": 0.12, "sim_min": 0.25, "nms_m": 12, "neg_margin": 0.0},
+    "object_check": {"area_m2": [10, 2000], "compactness_min": 0.3, "colour_frac_min": 0.5, "colour_area_min_m2": 6,
+                     "outline_by_colour": true,
+                     "_doc": "SAM outlines of pools often include the deck/yard, so with outline_by_colour the final outline = SAM mask ∩ pool-cyan pixels (dilated 1 px), the connected piece at the prompt. Area range, compactness and colour fraction are checked on that refined outline."}
   },
   "solar_installation": {
     "rerank": {"patch_weight": 0.8, "colour_weight": 0.2, "colour": {"hsv_lo": [190, 30, 20], "hsv_hi": [250, 255, 110]}, "pool": 400},

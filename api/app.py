@@ -23,7 +23,7 @@ from groundtruth.index import ChipIndex
 from groundtruth.providers.public import PublicDataProvider
 from groundtruth.tools import NOT_IMPLEMENTED, VERSION, Engine
 
-CONTRACT = "0.3.1"
+CONTRACT = "0.4"
 app = FastAPI(title="Groundtruth API", version=__version__)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 _provider = PublicDataProvider(download_scenes=False)
@@ -124,6 +124,7 @@ class RefineIn(Common):
     bbox: list[float] | None = None
     place: str | None = None
     concept: str | None = None
+    candidates: list[str] | None = None
 
 
 class CompareYearsIn(Common):
@@ -137,6 +138,7 @@ class OutlineIn(Common):
     examples: list[str]
     max: int = Field(24, ge=1, le=50)
     cached_only: bool = False
+    concept: str | None = None
 
 
 class GeoIn(Common):
@@ -181,21 +183,39 @@ def _replay(tool: str) -> dict[str, Any] | None:
     return env
 
 
+WARM: dict[str, Any] = {"done": os.environ.get("GROUNDTRUTH_WARMUP", "1") != "1", "error": None, "ms": None,
+                        "place": os.environ.get("GROUNDTRUTH_WARMUP_PLACE", "Ballantyne")}
+
+
 @app.on_event("startup")
 def _warmup() -> None:
-    """Load models + the default index in the background so the first demo call is warm (set GROUNDTRUTH_WARMUP=0 to skip)."""
-    if os.environ.get("GROUNDTRUTH_WARMUP", "1") != "1":
+    """Before reporting healthy: load models, touch the index, and run pick + find_all (in the warm-up place) + refine
+    on a dummy query, so the first real call is warm. /health reports ok=false, warming=true until done.
+    GROUNDTRUTH_WARMUP=0 skips it; GROUNDTRUTH_WARMUP_PLACE picks the place (default Ballantyne)."""
+    if WARM["done"]:
         return
 
     def run() -> None:
+        import time as _t
+
+        t0 = _t.perf_counter()
         try:
             e = eng(None, None)
             pc = e.pick_candidates("swimming pool")
-            ex = pc.result.geojson["features"][0]["properties"]["example"]
-            e.find_similar([ex], k=10, rerank=True, concept="swimming_pool")
-            e.outline([ex])
-        except Exception:
-            pass
+            feats = [f for f in pc.result.geojson["features"] if not f["properties"].get("no_clear_example")]
+            ex = next((f["properties"]["example"] for f in feats if f["properties"]["sense_id"] == "backyard_pool"),
+                      feats[0]["properties"]["example"])
+            neg = [f["properties"]["example"] for f in feats if f["properties"]["example"] != ex]
+            fa = e.find_all([ex], neg, place=WARM["place"] if e.aoi == "county" else None, concept="swimming_pool")
+            hits = fa.result.geojson["features"]
+            if hits:
+                e.refine(None, [ex, hits[0]["properties"]["example"]], [hits[-1]["properties"]["example"]], k=50,
+                         concept="swimming_pool", candidates=[h["properties"]["example"] for h in hits])
+        except Exception as err:  # never block health forever; report it
+            WARM["error"] = f"{type(err).__name__}: {err}"[:300]
+        finally:
+            WARM["ms"] = round((_t.perf_counter() - t0) * 1000)
+            WARM["done"] = True
 
     threading.Thread(target=run, daemon=True, name="warmup").start()
 
@@ -216,7 +236,8 @@ def _env(e: Envelope) -> JSONResponse:
 # ---------------- meta ----------------
 @app.get("/api/v1/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "contract": CONTRACT, "engine_version": VERSION, "indexes": available_indexes(),
+    return {"ok": bool(WARM["done"]), "warming": not WARM["done"], "warmup": {k: WARM[k] for k in ("ms", "error", "place")},
+            "contract": CONTRACT, "engine_version": VERSION, "indexes": available_indexes(),
             "primary_year": _provider.primary_year}
 
 
@@ -243,6 +264,19 @@ def chip(chip_id: str, year: int | None = None, aoi: str | None = None) -> Respo
 @app.get("/api/v1/events")
 def events() -> Response:
     return Response(status_code=501, content="reserved for the agent SSE stream (contract v0.1)")
+
+
+class AgentIn(BaseModel):
+    text: str
+    aoi: str | None = None
+
+
+@app.post("/api/v1/agent/run")
+def agent_run(b: AgentIn) -> JSONResponse:
+    """Rules planner (deterministic, no LLM): parse → real tool calls → map actions citing step envelopes."""
+    from groundtruth.planner import run as plan_run
+
+    return JSONResponse(plan_run(lambda year: eng(b.aoi, year), b.text))
 
 
 # ---------------- tools ----------------
@@ -276,12 +310,12 @@ def t_compare_years(b: CompareYearsIn) -> JSONResponse:
 @app.post("/api/v1/tools/refine")
 def t_refine(b: RefineIn) -> JSONResponse:
     return _env(eng(b.aoi, b.year).refine(b.session_id, b.accept, b.reject, k=b.k, bbox=b.bbox, place=b.place,
-                                          concept=b.concept))
+                                          concept=b.concept, candidates=b.candidates))
 
 
 @app.post("/api/v1/tools/outline")
 def t_outline(b: OutlineIn) -> JSONResponse:
-    return _env(eng(b.aoi, b.year).outline(b.examples, max=b.max, cached_only=b.cached_only))
+    return _env(eng(b.aoi, b.year).outline(b.examples, max=b.max, cached_only=b.cached_only, concept=b.concept))
 
 
 @app.post("/api/v1/tools/measure")

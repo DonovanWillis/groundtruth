@@ -18,11 +18,12 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 import numpy as np
+from PIL import Image
 from shapely.geometry import box, mapping, shape
 
 from groundtruth import config
 from groundtruth.envelope import Envelope, Result, StepTimer, declined, feature_collection
-from groundtruth.geo import SQM_PER_ACRE, length_m, to_measure
+from groundtruth.geo import SQM_PER_ACRE, length_m, to_measure, to_wgs84
 from groundtruth.index import ChipIndex, view_cells
 from groundtruth.providers.base import DataProvider
 
@@ -49,6 +50,18 @@ def senses_for(query: str) -> tuple[str | None, list[dict[str, Any]]]:
     return None, []
 
 
+def sense_colour_rule(sense: dict[str, Any], concept_key: str | None) -> dict[str, Any] | None:
+    """A sense's colour requirement: 'concept' → the concept's colour rule; a name → senses.json _colours[name]."""
+    c = sense.get("colour")
+    if not c:
+        return None
+    if c == "concept":
+        from groundtruth.rerank import concept_conf
+
+        return concept_conf(concept_key)["rerank"].get("colour")
+    return json.loads(config.SENSES_PATH.read_text()).get("_colours", {}).get(c)
+
+
 def concepts_default_change() -> dict[str, float]:
     from groundtruth.rerank import concepts
 
@@ -56,10 +69,19 @@ def concepts_default_change() -> dict[str, float]:
 
 
 def parse_example(s: str) -> tuple[str, int | None]:
-    if "#" in s:
-        cid, c = s.split("#", 1)
-        return cid, int(c)
-    return s, None
+    cid, cell, _ = parse_example_full(s)
+    return cid, cell
+
+
+def parse_example_full(s: str) -> tuple[str, int | None, int | None]:
+    """``chip_id`` | ``chip_id#cell`` | ``chip_id#cell:patch`` (patch 0–255 = 14 px / 8.4 m, from find_all scans)."""
+    if "#" not in s:
+        return s, None, None
+    cid, rest = s.split("#", 1)
+    if ":" in rest:
+        c, p = rest.split(":", 1)
+        return cid, int(c), int(p)
+    return cid, int(rest), None
 
 
 def _iou(a: tuple[float, ...], b: tuple[float, ...]) -> float:
@@ -120,6 +142,21 @@ class Engine:
         kw.setdefault("status", self._status())
         kw.setdefault("limits", self._limits())
         kw.setdefault("sources", self._sources())
+        if kw.get("confidence") is None:  # every envelope states a confidence (heuristic where that's all we have)
+            feats = (kw.get("result").geojson.get("features", []) if kw.get("result") is not None else [])
+            cs = [f["properties"].get("confidence") for f in feats if f.get("properties", {}).get("confidence") is not None]
+            if cs:
+                kw["confidence"] = round(float(np.mean(cs)), 3)
+                kw["method"] = kw.get("method", "") + "; confidence = mean per-feature confidence (heuristic)"
+            else:
+                sc = [f["properties"]["score"] for f in feats if f.get("properties", {}).get("score") is not None]
+                if sc:
+                    lo, hi = min(sc), max(sc)
+                    kw["confidence"] = round(float(np.mean([(s - lo) / max(hi - lo, 1e-6) for s in sc])), 3) if hi > lo else 0.5
+                    kw["method"] = kw.get("method", "") + "; confidence = mean relative score within this result (heuristic)"
+                else:
+                    kw["confidence"] = 0.0
+                    kw["method"] = kw.get("method", "") + "; confidence = 0 (no evidence returned)"
         return Envelope(tool=tool, version=VERSION, **kw)
 
     def _example_cells(self, examples: Sequence[str]) -> list[tuple[int, int]]:
@@ -281,22 +318,45 @@ class Engine:
             assigned = Smax.argmax(1) if len(Q) else None
         chosen: list[dict[str, Any]] = []
         chosen_vecs: list[np.ndarray] = []
+        no_clear: list[dict[str, Any]] = []
 
         def rep_cell(j: int, view: int) -> int:
             return self.index.salient_cell(int(idx[j]), view_cells(int(view), self.index.grid))
 
-        def try_pick(order: Sequence[int], view_of, sense: dict[str, Any], score_of) -> bool:
-            for j in order:
+        def cell_colour(i: int, rule: dict[str, Any]) -> np.ndarray:
+            """(64,) best 14 px patch colour fraction inside each 16.8 m cell."""
+            from groundtruth.rerank import _cell_patches, colour_cached
+
+            img = np.asarray(Image.open(io.BytesIO(self.index.thumb_jpeg(i))).convert("RGB"))
+            cp = colour_cached((str(self.index.root), i), img, rule).reshape(-1)
+            return np.array([cp[_cell_patches(c, self.index.grid)].max() for c in range(self.index.n_cells)])
+
+        def try_pick(order: Sequence[int], view_of, sense: dict[str, Any], score_of, limit: int = 60) -> bool:
+            rule = sense_colour_rule(sense, key)
+            cmin = float(sense.get("colour_min", 0))
+            for n_tried, j in enumerate(order):
+                if rule and n_tried >= limit:
+                    break
                 i = int(idx[j])
                 if any(c["i"] == i for c in chosen):
                     continue
-                cell = rep_cell(j, view_of(j))
+                cc = None
+                if rule:
+                    cc = cell_colour(i, rule)
+                    if cc.max() < cmin:
+                        continue  # no pixels of the sense's colour: not a clear example
+                    cell = int(np.argmax(cc))
+                else:
+                    cell = rep_cell(j, view_of(j))
                 v = self.index.cells(i)[cell]
                 if chosen_vecs and max(float(v @ w) for w in chosen_vecs) >= max_sim:
                     continue
-                chosen.append({"i": i, "cell": cell, "sense": sense, "score": float(score_of(j)), "j": j})
+                chosen.append({"i": i, "cell": cell, "sense": sense, "score": float(score_of(j)), "j": j,
+                               "cell_colour": cc, "rule": rule, "colour_min": cmin})
                 chosen_vecs.append(v)
                 return True
+            if rule:
+                no_clear.append(sense)
             return False
 
         with t.step("pick", f"one per sense, DINOv2 cell diversity cos<{max_sim}"):
@@ -315,13 +375,21 @@ class Engine:
                                 lambda j: raw[j]):
                     break
                 k_i += 1
-        with t.step("localise", f"OpenCLIP 2-stage (16 windows + 4 cells) × {len(chosen)} tiles, batched (sense-specific)"):
+        with t.step("localise", f"colour senses: concept/sense colour + OpenCLIP on the top-4 colour cells; others: "
+                    f"OpenCLIP 2-stage; {len(chosen)} tiles"):
+            plain = [c for c in chosen if c["rule"] is None]
             qs = []
-            for c in chosen:
+            for c in plain:
                 s_i = next((k for k, s in enumerate(prompted) if s is c["sense"]), None)
                 qs.append((c["i"], Q[s_i] if s_i is not None else qraw))
-            for c, (cell, sc) in zip(chosen, self.localise_many(qs)):
+            for c, (cell, sc) in zip(plain, self.localise_many(qs)):
                 c["cell"], c["cell_score"] = cell, sc
+            for c in [c for c in chosen if c["rule"] is not None]:
+                s_i = next((k for k, s in enumerate(prompted) if s is c["sense"]), None)
+                top = [int(x) for x in np.argsort(-c["cell_colour"])[:4] if c["cell_colour"][x] >= c["colour_min"] * 0.5]
+                sc = self._clip_cells(c["i"], top, Q[s_i] if s_i is not None else qraw)
+                best = max(range(len(top)), key=lambda k: sc[k] + 0.5 * float(c["cell_colour"][top[k]]))
+                c["cell"], c["cell_score"] = top[best], float(sc[best])
         feats = []
         for rank, c in enumerate(chosen, 1):
             j = c["j"]
@@ -331,17 +399,47 @@ class Engine:
                 members = idx[mine[np.argsort(-Smax[mine, s_i])]][:12]
             else:
                 members = idx[np.argsort(-raw)][:12]
+            cc = c.get("cell_colour")
             feats.append(self.index.feature(c["i"], cell=c["cell"], score=round(c["score"], 4), rank=rank,
                                             raw_score=round(float(raw[j]), 4), sense_id=c["sense"]["id"],
                                             sense_label=c["sense"]["label"], example=f"{self.index.ids[c['i']]}#{c['cell']}",
+                                            no_clear_example=False,
+                                            cell_colour=None if cc is None else round(float(cc[c["cell"]]), 3),
+                                            confidence=round(min(1.0, 0.5 + float(cc[c["cell"]])) if cc is not None else 0.6, 3),
                                             group_members=[self.index.ids[int(m)] for m in members]))
+        # senses with no clear example: shown as such rather than as a wrong tile
+        for sense in no_clear:
+            feats.append({"type": "Feature", "id": f"no_clear:{sense['id']}", "geometry": None, "properties": {
+                "sense_id": sense["id"], "sense_label": sense["label"], "no_clear_example": True,
+                "rank": len(feats) + 1, "confidence": 0.0,
+                "reason": f"no candidate with ≥{sense.get('colour_min')} of its colour ({sense.get('colour')}) in any patch"}})
+        clear = sum(1 for f in feats if not f["properties"]["no_clear_example"])
         return self._env(tool, result=Result(geojson=feature_collection(feats), metrics={
-            "count": len(feats), "pool": int(len(idx)), "sense_list": key,
+            "count": len(feats), "clear_examples": clear, "pool": int(len(idx)), "sense_list": key,
             "senses": [f["properties"]["sense_id"] for f in feats]}),
+            confidence=round(float(np.mean([f["properties"]["confidence"] for f in feats])), 3) if feats else None,
             method="OpenCLIP sense prompts (conf/senses.json) → each chip assigned to its best sense → one tile per "
-                   f"sense, DINOv2 8×8-cell MMR diversity (cos<{max_sim}); object cell localised by OpenCLIP in two "
-                   "stages (16 block windows, then 4 cells)",
+                   f"sense, DINOv2 8×8-cell MMR diversity (cos<{max_sim}); colour senses must show their colour "
+                   "(pool-cyan / tarp-blue / dark water) and their box goes on the best colour cell (CLIP among the top 4); "
+                   "other senses localised by OpenCLIP in two stages. Confidence = heuristic (colour evidence), not a probability",
             assumptions=["The configured senses cover the plausible meanings of the query"], steps=t.steps)
+
+    def _clip_cells(self, i: int, cells: Sequence[int], q: np.ndarray) -> list[float]:
+        """OpenCLIP score of 1.5-cell context crops centred on the given cells (one batch)."""
+        from PIL import Image as _I
+
+        if not cells:
+            return []
+        img = _I.open(io.BytesIO(self.index.thumb_jpeg(i))).convert("RGB")
+        g, cp = self.index.grid, config.CHIP_PX // self.index.grid
+        size = int(1.5 * cp) + 2
+        crops = []
+        for c in cells:
+            cx, cy = (c % g) * cp + cp / 2, (c // g) * cp + cp / 2
+            x0 = int(min(max(cx - size / 2, 0), config.CHIP_PX - size))
+            y0 = int(min(max(cy - size / 2, 0), config.CHIP_PX - size))
+            crops.append(np.asarray(img.crop((x0, y0, x0 + size, y0 + size)).resize((224, 224), _I.BILINEAR)))
+        return [float(s) for s in self._clip_model().embed_images(np.stack(crops), batch=8) @ q]
 
     # ------------------------------------------------------------------ find_similar
     def _cell_query(self, pos: list[tuple[int, int]], neg: list[tuple[int, int]], neg_weight: float) -> np.ndarray:
@@ -440,40 +538,126 @@ class Engine:
 
             if self._outliner is None:
                 self._outliner = Outliner()
-            self._queue: "queue.Queue[tuple[int, int]]" = queue.Queue()
-            self._queued: set[tuple[int, int]] = set()
-            self._busy = 0  # >0 while a search request runs: the outline worker yields the GPU
+            self._queue: "queue.Queue[tuple[int, int, int | None]]" = queue.Queue()
+            self._queued: set[tuple[int, int, int | None]] = set()
+            self.__dict__.setdefault("_busy", 0)  # >0 while a search request runs: the outline worker yields the GPU
 
             def run() -> None:
                 while True:
-                    i, c = self._queue.get()
+                    i, c, p = self._queue.get()
                     while self._busy > 0:
                         time.sleep(0.05)
                     try:
-                        self._outliner.outline(self.index, i, c)  # thread-safe, cached
+                        self._outliner.outline(self.index, i, c, patch=p)  # thread-safe, cached
                     except Exception:
                         pass
                     finally:
-                        self._queued.discard((i, c))
+                        self._queued.discard((i, c, p))
 
             self._worker = threading.Thread(target=run, daemon=True, name="outline-worker")
             self._worker.start()
         return self._queue
 
-    def _cached_outline(self, i: int, c: int) -> dict[str, Any] | None:
+    def _cached_outline(self, i: int, c: int, patch: int | None = None) -> dict[str, Any] | None:
         """Outline from the in-memory cache, else disk (outlines never change for a given index version)."""
         from groundtruth.outline import Outliner
 
         mem = self.__dict__.setdefault("_outline_mem", {})
-        key = (i, c)
+        key = (i, c, patch)
         if key in mem:
             return mem[key]
-        p = Outliner._cache_path(self.index.ids[i], c)
+        p = Outliner._cache_path(self.index.ids[i], c, patch)
         if not p.exists():
             return None
         f = json.loads(p.read_text())
         mem[key] = f
         return f
+
+    def object_check(self, outline: dict[str, Any], concept: str | None) -> dict[str, Any]:
+        """Post-SAM object check (thresholds in conf/concepts.json "object_check"): area range, compactness and the
+        fraction of the outline's pixels in the concept colour. → {pass, reason, area_m2, compactness, colour_frac}."""
+        from groundtruth.rerank import _hsv, concept_conf
+
+        cc = concept_conf(concept)
+        oc = cc.get("object_check", {})
+        rule = cc["rerank"].get("colour")
+        p = outline.get("properties", {})
+        cache = self.__dict__.setdefault("_check_cache", {})
+        key = (outline.get("id"), concept)
+        if key in cache:
+            return cache[key]
+        if not outline.get("geometry"):
+            res = {"pass": False, "reason": "no outline"}
+            cache[key] = res
+            return res
+        area = float(p.get("area_m2", 0))
+        comp = p.get("compactness")
+        if comp is None:
+            gm = to_measure(shape(outline["geometry"]))
+            comp = 4 * np.pi * gm.area / max(gm.length ** 2, 1e-9)
+        colour_frac = colour_area = None
+        refined_geom = None
+        if rule and oc.get("colour_frac_min", 0) > 0:
+            from PIL import Image
+            from rasterio.features import rasterize, shapes
+            from rasterio.transform import from_origin
+            from shapely.geometry import Point
+
+            i = self.index.pos.get(p.get("chip_id"))
+            if i is not None:
+                img = np.asarray(Image.open(io.BytesIO(self.index.thumb_jpeg(i))).convert("RGB"))
+                x0, y0 = float(self.index.meta["x0_m"][i]), float(self.index.meta["y0_m"][i])
+                tr = from_origin(x0, y0 + config.CHIP_M, config.GSD_M, config.GSD_M)
+                mask = rasterize([to_measure(shape(outline["geometry"]))], out_shape=img.shape[:2], transform=tr) > 0
+                if mask.any():
+                    lo, hi = np.array(rule["hsv_lo"], np.float32), np.array(rule["hsv_hi"], np.float32)
+                    cmask = np.all((_hsv(img) >= lo) & (_hsv(img) <= hi), -1)
+                    if oc.get("outline_by_colour"):
+                        # refined outline = SAM mask ∩ dilated colour pixels; keep the piece at the prompt (or the largest)
+                        dil = cmask.copy()
+                        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)):
+                            dil |= np.roll(np.roll(cmask, dy, 0), dx, 1)
+                        ref = mask & dil
+                        polys = [shape(g) for g, v in shapes(ref.astype(np.uint8), mask=ref, transform=tr) if v == 1]
+                        if polys:
+                            patch = p.get("patch")
+                            if patch is not None:
+                                pr, pc = divmod(int(patch), 16)
+                                pm = config.CHIP_M / 16
+                                pt = Point(x0 + (pc + 0.5) * pm, y0 + config.CHIP_M - (pr + 0.5) * pm)
+                                best = min(polys, key=lambda g: (g.distance(pt), -g.area))
+                            else:
+                                best = max(polys, key=lambda g: g.area)
+                            best = best.buffer(0).simplify(0.3)
+                            area = best.area
+                            comp = 4 * np.pi * best.area / max(best.length ** 2, 1e-9)
+                            refined_geom = mapping(to_wgs84(best))
+                            rmask = rasterize([best], out_shape=img.shape[:2], transform=tr) > 0
+                            inside = cmask[rmask] if rmask.any() else np.zeros(1, bool)
+                        else:
+                            area, inside = 0.0, np.zeros(1, bool)
+                    else:
+                        inside = cmask[mask]
+                    colour_frac = float(inside.mean())
+                    colour_area = float(inside.sum()) * config.GSD_M ** 2
+        lo_a, hi_a = oc.get("area_m2", [0, 1e12])
+        reasons = []
+        if not (lo_a <= area <= hi_a):
+            reasons.append(f"area {area:.0f} m² outside {lo_a}–{hi_a}")
+        if comp < oc.get("compactness_min", 0):
+            reasons.append(f"compactness {comp:.2f} < {oc['compactness_min']}")
+        if colour_frac is not None and colour_frac < oc.get("colour_frac_min", 0):
+            reasons.append(f"colour {colour_frac:.2f} < {oc['colour_frac_min']}")
+        if colour_area is not None and colour_area < oc.get("colour_area_min_m2", 0):
+            reasons.append(f"colour area {colour_area:.0f} m² < {oc['colour_area_min_m2']}")
+        res = {"pass": not reasons, "reason": "; ".join(reasons) or "ok", "area_m2": round(area, 1),
+               "compactness": round(float(comp), 3), "colour_frac": None if colour_frac is None else round(colour_frac, 3),
+               "colour_area_m2": None if colour_area is None else round(colour_area, 1),
+               "refined": refined_geom is not None}
+        if refined_geom is not None:
+            res["geometry"] = refined_geom
+        cache[key] = res
+        return res
 
     def place_bbox(self, place: str | None) -> list[float] | None:
         if not place:
@@ -482,19 +666,58 @@ class Engine:
         key = next((k for k in places if k.lower() == place.strip().lower()), None)
         return places[key]["bbox"] if key else None
 
+    def _patch_box_wgs84(self, i: int, patch: int) -> list[float]:
+        pm = config.CHIP_M / 16
+        pr, pc = divmod(int(patch), 16)
+        x0, y0 = float(self.index.meta["x0_m"][i]), float(self.index.meta["y0_m"][i])
+        top = y0 + config.CHIP_M
+        return self.index.bounds_wgs84((x0 + pc * pm, top - (pr + 1) * pm, x0 + (pc + 1) * pm, top - pr * pm))
+
+    def _object_feature(self, i: int, cell: int, patch: int | None, score: float, rank: int, concept: str | None,
+                        base_conf: float, extra: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Feature for one detected object: outline + object check when cached, else its patch/cell box."""
+        from shapely.geometry import box as sbox
+
+        ex_id = f"{self.index.ids[i]}#{cell}" + (f":{patch}" if patch is not None else "")
+        ol = self._cached_outline(i, cell, patch)
+        chk = self.object_check(ol, concept) if ol else None
+        f = self.index.feature(i, cell=cell, score=round(score, 4), rank=rank, example=ex_id, patch=patch, **extra)
+        p = f["properties"]
+        if ol and ol.get("geometry"):
+            refined = chk is not None and "geometry" in chk
+            f["geometry"] = chk["geometry"] if refined else ol["geometry"]
+            a_m2 = chk["area_m2"] if refined else ol["properties"]["area_m2"]
+            q = 0.5 + 0.5 * float(ol["properties"].get("sam_score", 0.8))
+            p.update(geometry_kind="outline", area_m2=a_m2, area_acres=round(a_m2 / SQM_PER_ACRE, 5),
+                     outline_refined_by_colour=refined, sam_area_m2=ol["properties"]["area_m2"],
+                     object_check={k: v for k, v in (chk or {}).items() if k != "geometry"},
+                     confidence=round(base_conf * q * (1.0 if chk and chk["pass"] else 0.0), 3))
+        else:
+            bb = self._patch_box_wgs84(i, patch) if patch is not None else p["cell_bbox"]
+            f["geometry"] = mapping(sbox(*bb))
+            p.update(geometry_kind="box", area_m2=None, area_acres=None, object_check=None,
+                     confidence=round(base_conf * 0.85, 3))
+        f["id"] = ex_id
+        return f, chk
+
     def find_all(self, examples: Sequence[str], exclude: Sequence[str] = (), k: int = 200,
                  bbox: Sequence[float] | None = None, place: str | None = None, concept: str | None = None,
-                 rerank: bool = True, outline_top: int = 200) -> Envelope:
-        """pick → ranked matches (county or bbox/place) → object dedupe → outlines (cached ones now, the top
-        ``outline_top`` queued in the background, lazily cached by chip#cell) → count / acres / median area."""
+                 rerank: bool = True, outline_top: int = 300) -> Envelope:
+        """The count. With a place/bbox: EXHAUSTIVE scan of every chip and cell in the box (scan.py): every object above
+        the concept threshold, deduped across chip borders, negatives ("not this") applied; outlines for the top
+        ``outline_top`` are queued (SAM 2, patch-prompted) and every cached outline passes an object check (area,
+        compactness, colour; conf/concepts.json); failed objects drop out of the count. County-wide (no box): ranked
+        top-k mode, stated in limits. Every count in the response is the same unit: deduped objects that are not
+        rejected. ``features`` = exactly those objects."""
         tool = "find_all"
         from groundtruth.rerank import concept_conf
-        from shapely.geometry import box as sbox
 
         if place and not bbox:
             bbox = self.place_bbox(place)
             if bbox is None:
                 return declined(tool, VERSION, f"unknown place {place!r} (see GET /api/v1/places)")
+        if bbox:
+            return self._find_all_scan(examples, exclude, bbox, place, concept, outline_top)
         self.__dict__["_busy"] = self.__dict__.get("_busy", 0) + 1
         try:
             base = self.find_similar(examples, exclude, k=k, bbox=bbox, rerank=rerank, concept=concept)
@@ -506,50 +729,114 @@ class Engine:
         t.steps.extend(base.steps)
         feats = base.result.geojson["features"]
         conf_cut = float(concept_conf(concept).get("count_conf", 0.5))
-        with t.step("outlines", f"attach cached; queue top {min(outline_top, len(feats))} for SAM 2"):
+        with t.step("objects", f"outline/object check; queue top {min(outline_top, len(feats))} for SAM 2"):
             q = self._outline_worker() if outline_top else None
             scores = [f["properties"]["score"] for f in feats] or [0]
             s_hi, s_lo = max(scores), min(scores)
-            out, polys = [], []
-            n_queued = 0
+            out, polys, rejected, n_queued = [], [], 0, 0
             for r, f in enumerate(feats):
                 p = f["properties"]
                 i, c = self.index.pos[p["chip_id"]], p["cell"]
-                ol = self._cached_outline(i, c)
-                rel = (p["score"] - s_lo) / max(s_hi - s_lo, 1e-6)
-                quality = (0.5 + 0.5 * ol["properties"]["sam_score"]) if ol and ol.get("geometry") else 0.85
-                conf = round(float(np.clip(rel * quality, 0, 1)), 3)
-                geom = ol["geometry"] if ol and ol.get("geometry") else mapping(sbox(*p["cell_bbox"]))
-                props = {**p, "example": f"{p['chip_id']}#{c}", "confidence": conf,
-                         "geometry_kind": "outline" if ol and ol.get("geometry") else "cell",
-                         "area_m2": ol["properties"]["area_m2"] if ol and ol.get("geometry") else None,
-                         "area_acres": ol["properties"]["area_acres"] if ol and ol.get("geometry") else None}
-                if q is not None and not ol and r < outline_top and (i, c) not in self._queued:
-                    self._queued.add((i, c)); q.put((i, c)); n_queued += 1
-                # object dedupe across chip borders: drop if it overlaps an earlier result's outline/cell by >50%
-                g = shape(geom)
-                gm = to_measure(g)
+                rel = float(np.clip((p["score"] - s_lo) / max(s_hi - s_lo, 1e-6), 0, 1))
+                feat, chk = self._object_feature(i, c, None, p["score"], r + 1, concept, rel, {})
+                if q is not None and chk is None and r < outline_top and (i, c, None) not in self._queued:
+                    self._queued.add((i, c, None)); q.put((i, c, None)); n_queued += 1
+                if chk is not None and not chk["pass"]:
+                    rejected += 1
+                    continue
+                if feat["properties"]["confidence"] < conf_cut:
+                    continue
+                gm = to_measure(shape(feat["geometry"]))
                 if any(gm.intersection(o).area > 0.5 * min(gm.area, o.area) for o in polys):
                     continue
                 polys.append(gm)
-                out.append({"type": "Feature", "id": props["example"], "geometry": geom, "properties": props})
-        detected = [f for f in out if f["properties"]["confidence"] >= conf_cut]
-        areas = [f["properties"]["area_m2"] for f in detected if f["properties"]["area_m2"]]
-        tot = float(sum(areas))
-        metrics = {"count_detected": len(detected), "count_returned": len(out), "confidence_cut": conf_cut,
-                   "outlined": sum(1 for f in out if f["properties"]["geometry_kind"] == "outline"),
-                   "outlines_queued": n_queued, "area_m2_total": round(tot, 1),
-                   "area_acres_total": round(tot / SQM_PER_ACRE, 3),
-                   "median_area_m2": round(float(np.median(areas)), 1) if areas else None,
-                   "bbox": list(bbox) if bbox else None, "place": place, "concept": concept}
+                out.append(feat)
+        for r, f in enumerate(out):
+            f["properties"]["rank"] = r + 1
+        metrics = self._object_metrics(out, rejected, n_queued, bbox, place, concept)
+        metrics.update(mode="ranked_top_k", confidence_cut=conf_cut)
         limits = self._limits() + [
-            "count = detected objects in the ranked results (top k, confidence ≥ cut), not a census",
-            f"Only the top {k} matches are considered; areas are summed over outlined detections only",
-            "Confidence is a heuristic (relative similarity × outline quality), not a calibrated probability"]
+            f"County-wide mode: only the top {k} ranked matches are examined, so this is NOT an exhaustive count; "
+            "give a place or bbox for a full scan",
+            "count = deduped objects with confidence ≥ cut that did not fail the object check",
+            "Confidence is a heuristic (relative similarity × outline quality × object check), not a calibrated probability"]
         return self._env(tool, result=Result(geojson=feature_collection(out), metrics=metrics),
-                         confidence=None, method=base.method + "; object dedupe by outline/cell overlap > 50%; SAM 2.1 "
-                         "outlines prompted by the matching cell (lazy, cached)",
-                         assumptions=base.assumptions, limits=limits, steps=t.steps)
+                         confidence=self._mean_conf(out), method=base.method + "; object dedupe by geometry overlap > 50%; "
+                         "SAM 2.1 outlines (lazy, cached) + object check", assumptions=base.assumptions,
+                         limits=limits, steps=t.steps)
+
+    @staticmethod
+    def _mean_conf(feats: Sequence[dict[str, Any]]) -> float | None:
+        cs = [f["properties"].get("confidence") for f in feats if f["properties"].get("confidence") is not None]
+        return round(float(np.mean(cs)), 3) if cs else None
+
+    @staticmethod
+    def _object_metrics(out: Sequence[dict[str, Any]], rejected: int, queued: int, bbox, place, concept) -> dict[str, Any]:
+        areas = [f["properties"]["area_m2"] for f in out if f["properties"].get("area_m2")]
+        tot = float(sum(areas))
+        return {"count_detected": len(out), "outlined": sum(1 for f in out if f["properties"]["geometry_kind"] == "outline"),
+                "pending_outline": sum(1 for f in out if f["properties"]["geometry_kind"] != "outline"),
+                "rejected_by_object_check": rejected, "outlines_queued": queued,
+                "area_m2_total": round(tot, 1), "area_acres_total": round(tot / SQM_PER_ACRE, 3),
+                "median_area_m2": round(float(np.median(areas)), 1) if areas else None,
+                "bbox": list(bbox) if bbox else None, "place": place, "concept": concept,
+                "count_unit": "deduped objects not rejected by the object check (same unit as features)"}
+
+    def _find_all_scan(self, examples: Sequence[str], exclude: Sequence[str], bbox: Sequence[float],
+                       place: str | None, concept: str | None, outline_top: int) -> Envelope:
+        from groundtruth.scan import scan
+
+        tool = "find_all"
+        pos = self._example_cells(examples)
+        if not pos:
+            return declined(tool, VERSION, "none of the example ids are in the index")
+        neg = self._example_cells(exclude)
+        rows = self._bbox_rows(bbox)
+        t = StepTimer()
+        self.__dict__["_busy"] = self.__dict__.get("_busy", 0) + 1
+        try:
+            with t.step("scan", f"every chip + cell in the box ({len(rows)} chips, {len(rows) * self.index.n_cells} cells)") as st:
+                dets, info = scan(self, pos, neg, rows, concept)
+                st.detail += (f" → {info.get('chips_prefiltered', 0)} chips at full resolution ({info.get('device', '-')}) → "
+                              f"{info.get('raw_detections', 0)} raw → {info.get('objects', 0)} objects after dedupe")
+        finally:
+            self._busy -= 1
+        from groundtruth.rerank import concept_conf
+
+        dconf = concept_conf(concept)["detect"]
+        smin = float(dconf["score_min"]) if "sim_min" not in dconf else 0.6 * float(dconf["sim_min"]) + 0.4 * float(dconf["colour_min"])
+        with t.step("objects", f"outline/object check; queue top {min(outline_top, len(dets))} for SAM 2"):
+            q = self._outline_worker() if outline_top else None
+            out, rejected, n_queued = [], 0, 0
+            for r, d in enumerate(dets):
+                base = float(np.clip(0.5 + (d.score - smin) / 0.3, 0, 1))
+                feat, chk = self._object_feature(d.row, d.cell, d.patch, d.score, r + 1, concept, base,
+                                                 {"patch_sim": round(d.patch_sim, 4), "colour": round(d.colour, 3),
+                                                  "n_patches": d.n_patches})
+                if q is not None and chk is None and r < outline_top and (d.row, d.cell, d.patch) not in self._queued:
+                    self._queued.add((d.row, d.cell, d.patch)); q.put((d.row, d.cell, d.patch)); n_queued += 1
+                if chk is not None and not chk["pass"]:
+                    rejected += 1
+                    continue
+                out.append(feat)
+        for r, f in enumerate(out):
+            f["properties"]["rank"] = r + 1
+        metrics = self._object_metrics(out, rejected, n_queued, bbox, place, concept)
+        metrics.update(mode="exhaustive_scan", **{k: v for k, v in info.items() if k != "device"}, device=info.get("device"))
+        limits = self._limits() + [
+            f"Exhaustive within the box: all {info['chips_in_box']} chips / {info['cells_scanned']} cells scored; objects "
+            "below the concept threshold (conf/concepts.json) are not counted",
+            "count = deduped objects (merged within the concept's nms_m) that did not fail the object check; "
+            "objects not yet outlined are counted on their image evidence and may still be rejected once outlined",
+            "Confidence is a heuristic (margin over the threshold × outline quality × object check), not a probability"]
+        return self._env(tool, result=Result(geojson=feature_collection(out), metrics=metrics),
+                         confidence=self._mean_conf(out),
+                         method="Exhaustive scan: DINOv2 8×8 cells for every chip in the box → prefilter (cell similarity "
+                                "or concept colour) → full-res DINOv2 patches + concept colour → connected patch groups = "
+                                "objects → closer to positives than to the 'not this' negatives → dedupe by distance → "
+                                "SAM 2.1 outline (patch-prompted, lazy) → object check (area, compactness, colour)",
+                         assumptions=["The picked examples show the intended object; the unpicked senses are negatives"],
+                         limits=limits, steps=t.steps)
 
     # ------------------------------------------------------------------ compare_years (search across time)
     def compare_years(self, examples: Sequence[str], from_year: int = 2020, concept: str | None = None) -> Envelope:
@@ -610,6 +897,7 @@ class Engine:
                                                 thumb_url_then=f"/api/v1/chips/{oid}.jpg?year={from_year}"))
         return self._env(tool, status=self._status(), result=Result(geojson=feature_collection(feats), metrics={
             **counts, "from_year": from_year, "to_year": self.year, "concept": concept}),
+            confidence=round((counts["new"] + counts["existing"]) / max(1, sum(counts.values())), 3),
             method=(f"Same 16.8 m cell in NAIP {from_year} vs {self.year} (fixed EPSG:32617 grid, shared PCA basis): DINOv2 "
                     "cell cosine" + ("; concept colour fraction then vs now (HSV range from conf/concepts.json)" if rule else "")
                     + f"; thresholds {th}"),
@@ -622,10 +910,12 @@ class Engine:
     # ------------------------------------------------------------------ refine
     def refine(self, session_id: str | None, accept_ids: Sequence[str] = (), reject_ids: Sequence[str] = (),
                k: int = 50, pool: int = 1500, bbox: Sequence[float] | None = None, place: str | None = None,
-               concept: str | None = None) -> Envelope:
-        """Per-session logistic regression on DINOv2 cell vectors (accepted vs rejected + background cells),
-        applied to every cell of a candidate pool (re-ranked find_similar from the accepted examples, within the
-        place/bbox if given). Each hit says why: its nearest accepted example. Target < 1 s (pool cached per session)."""
+               concept: str | None = None, candidates: Sequence[str] | None = None) -> Envelope:
+        """Per-session logistic regression on DINOv2 cell vectors (accepted vs rejected + background cells).
+        With ``candidates`` (the object ids from find_all): re-scores EXACTLY those objects, so every count stays in one
+        unit (deduped objects): accepted → kept (P = 1), rejected → removed, others counted when P ≥ 0.5 and not
+        rejected by the object check. Without candidates: legacy mode over a cell-search pool (place/bbox if given).
+        Each hit says why: its nearest accepted example. Target < 1 s."""
         from sklearn.linear_model import LogisticRegression
 
         tool = "refine"
@@ -641,6 +931,8 @@ class Engine:
             return declined(tool, VERSION, "refine needs at least one accepted example")
         if place and not bbox:
             bbox = self.place_bbox(place)
+        if candidates:
+            return self._refine_objects(sid, sess, pos, neg, candidates, concept)
         t = StepTimer()
         skip = {i for i, _ in pos} | {i for i, _ in neg}
         key = (tuple(bbox) if bbox else None, concept)
@@ -697,35 +989,126 @@ class Engine:
                    "cells, negatives = rejected cells + 150 random background cells; scores = P(match) of best cell",
             assumptions=["Accepted/rejected examples are representative"], steps=t.steps)
 
+    def _refine_objects(self, sid: str, sess: Session, pos, neg, candidates: Sequence[str],
+                        concept: str | None) -> Envelope:
+        from sklearn.linear_model import LogisticRegression
+
+        tool = "refine"
+        t = StepTimer()
+        acc_ids, rej_ids = set(sess.accept), set(sess.reject)
+        items = []
+        for ex in candidates:
+            cid, c, p = parse_example_full(ex)
+            if cid in self.index.pos and ex not in rej_ids:
+                i = self.index.pos[cid]
+                items.append((ex, i, c if c is not None else self.index.salient_cell(i), p))
+        with t.step("fit", f"logistic regression: {len(pos)} accepted, {len(neg)} rejected + background"):
+            rng = np.random.default_rng(0)
+            bg_i = rng.choice(len(self.index), size=min(150, len(self.index)), replace=False)
+            bg = np.stack([self.index.cells(int(i))[int(rng.integers(self.index.n_cells))] for i in bg_i])
+            Xp = np.stack([self.index.cells(i)[c] for i, c in pos])
+            Xn = np.concatenate(([np.stack([self.index.cells(i)[c] for i, c in neg])] if neg else []) + [bg])
+            clf = LogisticRegression(C=1.0, class_weight="balanced", max_iter=500).fit(
+                np.concatenate([Xp, Xn]), np.r_[np.ones(len(Xp)), np.zeros(len(Xn))])
+        with t.step("score", f"{len(items)} objects (the find_all set)"):
+            X = np.stack([self.index.cells(i)[c] for _, i, c, _ in items]) if items else np.zeros((0, Xp.shape[1]))
+            P = clf.predict_proba(X)[:, 1] if len(items) else np.zeros(0)
+            A = Xp
+        counted, below, rejected_check = [], 0, 0
+        with t.step("objects", "outline + object check + why"):
+            order = sorted(range(len(items)), key=lambda j: (-(1.0 if items[j][0] in acc_ids else float(P[j])), items[j][0]))
+            for j in order:
+                ex, i, c, p = items[j]
+                prob = 1.0 if ex in acc_ids else float(P[j])
+                sims = A @ self.index.cells(i)[c]
+                b = int(np.argmax(sims))
+                feat, chk = self._object_feature(i, c, p, prob, 0, concept, prob, {
+                    "accepted": ex in acc_ids,
+                    "why": {"nearest_accepted": sess.accept[b] if b < len(sess.accept) else None,
+                            "similarity": round(float(sims[b]), 3)}})
+                if chk is not None and not chk["pass"]:
+                    rejected_check += 1
+                    continue
+                if prob < 0.5:
+                    below += 1
+                    continue
+                feat["properties"]["confidence"] = round(prob if chk is None or chk["pass"] else 0.0, 3)
+                counted.append(feat)
+        for r, f in enumerate(counted):
+            f["properties"]["rank"] = r + 1
+        metrics = self._object_metrics(counted, rejected_check, 0, None, None, concept)
+        metrics.update(session_id=sid, accepted=len(pos), rejected=len(neg), user_rejected=len(rej_ids),
+                       below_cut=below, candidates=len(candidates), refine_ms=round(sum(s.ms for s in t.steps), 1),
+                       mode="objects")
+        return self._env(tool, result=Result(geojson=feature_collection(counted), metrics=metrics),
+                         confidence=self._mean_conf(counted),
+                         method="Logistic regression (sklearn, C=1, balanced) on DINOv2 8×8-cell vectors of the find_all "
+                                "objects; positives = accepted, negatives = rejected + 150 background cells; counted = "
+                                "accepted, or P(match) ≥ 0.5 and not rejected by the object check",
+                         assumptions=["Accepted/rejected examples are representative"],
+                         limits=self._limits() + ["count = deduped objects from the find_all set (same unit as find_all)",
+                                                  "P(match) is the classifier's output on few examples: indicative, not calibrated"],
+                         steps=t.steps)
+
     # ------------------------------------------------------------------ outline
-    def outline(self, examples: Sequence[str], max: int = 12, cached_only: bool = False) -> Envelope:  # noqa: A002
-        """SAM 2.1 polygons prompted by each hit's cell box (+1 cell margin). Lazy: only the ids given (the results
-        on screen), at most ``max``; cached by chip#cell. ``cached_only`` returns only what is already computed (for
-        polling while find_all's background queue works) and never runs SAM."""
+    def outline(self, examples: Sequence[str], max: int = 12, cached_only: bool = False,  # noqa: A002
+                concept: str | None = None) -> Envelope:
+        """SAM 2.1 polygons prompted by each id's patch (``chip#cell:patch``) or cell. Lazy: only the ids given (the
+        results on screen), at most ``max``; cached. ``cached_only`` never runs SAM (for polling while find_all's
+        background queue works). With ``concept``, each outline carries ``object_check`` {pass, reason, …}; rejected
+        objects are listed in ``metrics.rejected`` so a client can drop them from its count."""
         tool = "outline"
-        cells = self._example_cells(examples)[:max]
-        if not cells:
+        items = []
+        for ex in examples:
+            cid, c, p = parse_example_full(ex)
+            if cid in self.index.pos:
+                i = self.index.pos[cid]
+                items.append((i, c if c is not None else self.index.salient_cell(i), p))
+        items = items[:max]
+        if not items:
             return declined(tool, VERSION, "none of the example ids are in the index")
+
+        def checked(fs: list[dict[str, Any]]) -> list[str]:
+            rej = []
+            if concept:
+                for f in fs:
+                    chk = self.object_check(f, concept)
+                    if "geometry" in chk:
+                        f["properties"]["sam_area_m2"] = f["properties"].get("area_m2")
+                        f["geometry"] = chk["geometry"]
+                        f["properties"]["area_m2"] = chk["area_m2"]
+                        f["properties"]["area_acres"] = round(chk["area_m2"] / SQM_PER_ACRE, 5)
+                        f["properties"]["outline_refined_by_colour"] = True
+                    f["properties"]["object_check"] = {k: v for k, v in chk.items() if k != "geometry"}
+                    if not chk["pass"]:
+                        rej.append(f["properties"].get("example") or f.get("id"))
+            return rej
+
         if cached_only:
             t = StepTimer()
-            with t.step("cache", f"{len(cells)} ids, cached only"):
-                feats = [f for f in (self._cached_outline(i, c) for i, c in cells) if f]
+            with t.step("cache", f"{len(items)} ids, cached only"):
+                feats = [f for f in (self._cached_outline(i, c, p) for i, c, p in items) if f]
+                feats = [json.loads(json.dumps(f)) for f in feats]
+                rej = checked(feats)
             done = [f for f in feats if f.get("geometry")]
-            tot = sum(f["properties"]["area_m2"] for f in done)
-            return self._env(tool, status="ok" if len(feats) == len(cells) else "partial",
+            tot = sum(f["properties"]["area_m2"] for f in done if (f["properties"].get("example") or f.get("id")) not in rej)
+            return self._env(tool, status="ok" if len(feats) == len(items) else "partial",
                              result=Result(geojson=feature_collection(feats), metrics={
-                                 "count": len(done), "pending": len(cells) - len(feats), "cached": len(feats),
-                                 "area_m2_total": round(tot, 2), "area_acres_total": round(tot / SQM_PER_ACRE, 4)}),
-                             method="cached SAM 2.1 outlines only (no new computation)", steps=t.steps)
+                                 "count": len(done), "pending": len(items) - len(feats), "cached": len(feats),
+                                 "rejected": rej, "area_m2_total": round(tot, 2),
+                                 "area_acres_total": round(tot / SQM_PER_ACRE, 4)}),
+                             confidence=1.0, method="cached SAM 2.1 outlines only (no new computation)"
+                             + (" + object check" if concept else ""), steps=t.steps)
         if self._outliner is None:
             from groundtruth.outline import Outliner
 
             self._outliner = Outliner()
         t = StepTimer()
         feats = []
-        with t.step("sam2", f"{len(cells)} outlines (SAM 2.1 hiera-tiny, {self._outliner.device_name})"):
-            for i, c in cells:
-                feats.append(self._outliner.outline(self.index, i, c))
+        with t.step("sam2", f"{len(items)} outlines (SAM 2.1 hiera-tiny, {self._outliner.device_name})"):
+            for i, c, p in items:
+                feats.append(json.loads(json.dumps(self._outliner.outline(self.index, i, c, patch=p))))
+            rej = checked(feats)
         done = [f for f in feats if f.get("geometry")]
         fresh = [f["properties"]["ms"] for f in feats if not f["properties"].get("cached")]
         tot = sum(f["properties"]["area_m2"] for f in done)
@@ -734,9 +1117,11 @@ class Engine:
                              "count": len(done), "empty": len(feats) - len(done),
                              "area_m2_total": round(tot, 2), "area_acres_total": round(tot / SQM_PER_ACRE, 4),
                              "ms_per_outline": round(float(np.mean(fresh)), 1) if fresh else None,
-                             "cached": len(feats) - len(fresh)}),
-                         method="SAM 2.1 hiera-tiny (Apache-2.0) box prompt = matched 16.8 m cell + 1 cell margin, on the "
-                                "0.6 m chip; largest mask component overlapping the cell; simplified 0.3 m; areas in EPSG:32617",
+                             "cached": len(feats) - len(fresh), "rejected": rej}),
+                         confidence=round(float(np.mean([f["properties"].get("sam_score", 0) for f in done])), 3) if done else None,
+                         method="SAM 2.1 hiera-tiny (Apache-2.0); prompt = the object's 8.4 m patch (or 16.8 m cell) centre "
+                                "point + box; component containing the prompt; simplified 0.3 m; areas in EPSG:32617"
+                                + ("; object check (area, compactness, colour; conf/concepts.json)" if concept else ""),
                          assumptions=["The object of interest is inside the prompted box"],
                          limits=self._limits() + ["Outlines from 0.6 m imagery: edges ±1 px (0.6 m)"], steps=t.steps)
 

@@ -28,8 +28,9 @@ def trim(env: dict, keep: int = 3, max_geom_chars: int = 4000) -> dict:
 
     feats = env.get("result", {}).get("geojson", {}).get("features", [])
     if len(feats) > keep:
+        dropped = len(feats) - keep
         env["result"]["geojson"]["features"] = feats = feats[:keep]
-        env["_fixture"] = {"truncated_features": len(feats) - keep}
+        env["_fixture"] = {"truncated_features": dropped}
     for f in feats:  # fixtures show shape, not survey-grade geometry
         g = f.get("geometry")
         if g and len(json.dumps(g)) > max_geom_chars:
@@ -73,8 +74,14 @@ def main() -> None:
     rf = call("refine", {**common, "accept": [ex, f"{hits[0]['id']}#{hits[0]['properties']['cell']}"],
                          "reject": [neg, f"{hits[-1]['id']}#{hits[-1]['properties']['cell']}"], "k": 12})
     call("outline", {**common, "examples": [ex]})
-    fa = call("find_all", {**common, "examples": [ex], "exclude": [neg], "concept": "swimming_pool", "k": 60,
-                           "outline_top": 12})
+    from groundtruth import config as _cfg
+
+    fa = call("find_all", {**common, "examples": [ex], "exclude": [neg], "concept": "swimming_pool",
+                           "bbox": list(_cfg.AOIS[a.aoi]), "outline_top": 50})
+    fa_ids = [f["properties"]["example"] for f in fa["result"]["geojson"]["features"]]
+    if len(fa_ids) >= 3:
+        call("refine", {**common, "accept": [ex, fa_ids[0]], "reject": [fa_ids[-1]], "concept": "swimming_pool",
+                        "candidates": fa_ids})
     call("compare_years", {**common, "examples": [f["id"] for f in fa["result"]["geojson"]["features"][:12]],
                            "from_year": 2020, "concept": "swimming_pool"})
     cells = {"type": "FeatureCollection", "features": [

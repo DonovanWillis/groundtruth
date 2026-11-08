@@ -134,6 +134,62 @@ def patch_tokens(index: ChipIndex, rows: Sequence[int], batch: int = 64) -> tupl
     return np.stack(out_t), np.stack(out_rgb), dino.device_name
 
 
+class GpuPatchCache:
+    """LRU of per-chip DINOv2 patch tokens kept ON THE DEVICE (fp16, 256×768 ≈ 0.39 MB per chip).
+    Size: GROUNDTRUTH_PATCH_GPU_CACHE chips (default 3000 ≈ 1.2 GB VRAM, inside the 4 GB cap)."""
+
+    def __init__(self) -> None:
+        self.max = int(__import__("os").environ.get("GROUNDTRUTH_PATCH_GPU_CACHE", "3000"))
+        self.d: OrderedDict[tuple[str, int], Any] = OrderedDict()
+
+    def get_many(self, index: ChipIndex, rows: Sequence[int], batch: int = 64):
+        """→ torch tensor (n, 256, 768) on the DINOv2 device (fp16 on CUDA, fp32 on CPU), rows in order."""
+        import torch
+
+        dino = get_dino()
+        root = str(index.root)
+        missing = [int(r) for r in rows if (root, int(r)) not in self.d]
+        for k in range(0, len(missing), batch):
+            rb = missing[k:k + batch]
+            imgs = np.stack([np.asarray(Image.open(io.BytesIO(index.thumb_jpeg(r))).convert("RGB")) for r in rb])
+            x = (imgs.astype(np.float32) / 255.0 - IMAGENET_MEAN) / IMAGENET_STD
+            xt = torch.from_numpy(np.ascontiguousarray(x.transpose(0, 3, 1, 2))).to(dino.device)
+            with torch.inference_mode():
+                if dino.device_name == "cuda":
+                    with torch.autocast("cuda", dtype=torch.float16):
+                        h = dino.model(pixel_values=xt).last_hidden_state[:, 1:, :]
+                    h = torch.nn.functional.normalize(h.float(), dim=-1).half()
+                else:
+                    h = torch.nn.functional.normalize(dino.model(pixel_values=xt).last_hidden_state[:, 1:, :].float(), dim=-1)
+            for t, r in enumerate(rb):
+                self.d[(root, r)] = h[t]
+        out = []
+        for r in rows:
+            key = (root, int(r))
+            self.d.move_to_end(key)
+            out.append(self.d[key])
+        while len(self.d) > self.max:
+            self.d.popitem(last=False)
+        return torch.stack(out) if out else None, dino.device_name
+
+
+GPU_PATCHES = GpuPatchCache()
+
+
+def colour_map(index: ChipIndex, i: int, rule: dict[str, Any] | None) -> np.ndarray:
+    """(16,16) concept-colour fraction per patch for chip row i (cached; decodes the thumbnail only on a miss)."""
+    if not rule:
+        return np.zeros((PATCHES, PATCHES), np.float32)
+    k = (str(index.root), int(i), json.dumps(rule, sort_keys=True))
+    v = _COLOUR.get(k)
+    if v is None:
+        v = colour_patches(np.asarray(Image.open(io.BytesIO(index.thumb_jpeg(int(i)))).convert("RGB")), rule)
+        _COLOUR[k] = v
+        while len(_COLOUR) > 50000:
+            _COLOUR.popitem(last=False)
+    return v
+
+
 def _cell_patches(cell: int, grid: int) -> list[int]:
     """8×8 cell → its 2×2 patch ids in the 16×16 patch grid."""
     f = PATCHES // grid
