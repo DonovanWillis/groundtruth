@@ -217,18 +217,11 @@ def _warmup() -> None:
                 e.refine(None, [ex, hits[0]["properties"]["example"]], [hits[-1]["properties"]["example"]], k=50,
                          concept="swimming_pool", candidates=[h["properties"]["example"] for h in hits])
             WARM["core_ms"] = round((_t.perf_counter() - t0) * 1000)
-            WARM["done"] = True  # healthy once the hero flow is warm; the rest warms in the background
-            if e.aoi == "county" and os.environ.get("GROUNDTRUTH_WARMUP_PLACES", "1") == "1":
+            if e.aoi == "county" and os.environ.get("GROUNDTRUTH_WARMUP_CHAIN", "1") == "1":
                 from groundtruth.planner import run as plan_run
 
-                def idle() -> None:  # background warm-up yields to real requests (GPU + CPU are shared)
-                    while _t.time() - LAST_REQ["t"] < 3.0 or LAST_REQ["active"] > 0:
-                        _t.sleep(0.5)
-
-                for pl in json.loads((config.SENSES_PATH.parent / "places.json").read_text())["places"]:
-                    idle()
-                    e.find_all([ex], [], place=pl, concept="swimming_pool", soft_exclude=neg)
-                # landing chips + the typed demo chain, with the contexts the UI sends (planner results are cached)
+                # BEFORE healthy: the landing chips + the typed demo chain, with the contexts the UI sends (planner
+                # results are cached), so the first run after a restart meets every budget
                 for chip, ctx in (("find swimming pools", None), ("pools within 1 km of I-485 in Ballantyne", None),
                                   ("pools in flood zones in Matthews", None), ("new pools since 2020 in Ballantyne", None),
                                   ("boat docks on Lake Norman", None),
@@ -237,13 +230,23 @@ def _warmup() -> None:
                                   ("buildings taller than 30 m in Uptown", None),
                                   ("export them as CSV", {"place": WARM["place"],
                                                           "last_text": "new pools since 2020 in Ballantyne"})):
-                    idle()
                     plan_run(lambda year: eng(None, year), chip, ctx)
-                WARM["places_ms"] = round((_t.perf_counter() - t0) * 1000)
+                WARM["chain_ms"] = round((_t.perf_counter() - t0) * 1000)
             # results are cached now: hand the index file pages back (page cache → Windows), incl. the 2020 index
             e.index.release_pages()
             for other in e.__dict__.get("_other_index", {}).values():
                 other.release_pages()
+            WARM["done"] = True  # healthy; the other neighbourhoods warm in the background, yielding to requests
+            if e.aoi == "county" and os.environ.get("GROUNDTRUTH_WARMUP_PLACES", "1") == "1":
+                def idle() -> None:  # background warm-up yields to real requests (GPU + CPU are shared)
+                    while _t.time() - LAST_REQ["t"] < 3.0 or LAST_REQ["active"] > 0:
+                        _t.sleep(0.5)
+
+                for pl in json.loads((config.SENSES_PATH.parent / "places.json").read_text())["places"]:
+                    idle()
+                    e.find_all([ex], [], place=pl, concept="swimming_pool", soft_exclude=neg)
+                WARM["places_ms"] = round((_t.perf_counter() - t0) * 1000)
+                e.index.release_pages()
         except Exception as err:  # never block health forever; report it
             WARM["error"] = f"{type(err).__name__}: {err}"[:300]
         finally:
@@ -282,7 +285,7 @@ def _env(e: Envelope) -> JSONResponse:
 # ---------------- meta ----------------
 @app.get("/api/v1/health")
 def health() -> dict[str, Any]:
-    return {"ok": bool(WARM["done"]), "warming": not WARM["done"], "warmup": {k: WARM.get(k) for k in ("core_ms", "places_ms", "ms", "error", "place")},
+    return {"ok": bool(WARM["done"]), "warming": not WARM["done"], "warmup": {k: WARM.get(k) for k in ("core_ms", "chain_ms", "places_ms", "ms", "error", "place")},
             "contract": CONTRACT, "engine_version": VERSION, "indexes": available_indexes(),
             "primary_year": _provider.primary_year}
 

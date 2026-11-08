@@ -30,7 +30,7 @@ ch = next(f for f in tiles if f["properties"]["sense_id"] == DEFAULT_SENSE["swim
 ex, neg = [ch["properties"]["example"]], [f["properties"]["example"] for f in tiles if f is not ch]
 out = {"place": place, "true_match_labels": len(tm), "look_alike_labels": len(la)}
 for mode in (False, True):
-    env = eng.find_all(ex, neg, place=place, concept="swimming_pool", outline_top=500, dense=mode)
+    env = eng.find_all(ex, [], place=place, concept="swimming_pool", outline_top=500, dense=mode, soft_exclude=neg)
     gs = [to_measure(shape(f["geometry"])) for f in env.result.geojson["features"]]
     found = sum(1 for p in tm if any(g.distance(p) <= 15 for g in gs))
     looks = sum(1 for p in la if any(g.distance(p) <= 15 for g in gs))

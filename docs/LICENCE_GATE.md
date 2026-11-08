@@ -149,3 +149,8 @@ clear licence (the GeoRSCLIP precedent). See Decisions needed, D1.
   - MCP Python SDK.
 - **GeoAI:** optional. If used, install the base package only (no extras). Vendoring the ~30-line torchvision Mask
   R-CNN loader with `hf_hub_download` gives the same result without the heavy dependency tree.
+
+## Decisions closed (Monish, 2026-11-08)
+- **D1 Grounding DINO + Florence-2:** accepted for Groundtruth: "weights Apache/MIT; training data partly
+  research-only; legal review required before ORYN commercial use".
+- **PDAL:** not used; laspy (BSD-2) + lazrs (MIT) read the 3DEP EPT. Closed.

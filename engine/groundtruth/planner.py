@@ -155,14 +155,15 @@ def parse(text: str) -> Plan:
             if re.search(rf"\b{re.escape(a)}\b", core) and (best is None or len(a) > len(best[1])):
                 best = (key, a)
     pc = _conf_pc()
-    bkind = next((k for k, v in pc["buildings"].items() if any(re.search(rf"\b{re.escape(w)}\b", core) for w in v["words"])),
-                 None)
+    # place categories / building kinds must be the WHOLE remaining phrase ("school bus lots" is not "school")
+    whole = re.sub(r"^(all |the |any |every )", "", core).strip(" ,")
+    bkind = next((k for k, v in pc["buildings"].items() if whole in v["words"]), None)
     if best and not (bkind and p.min_height_m is not None and best[0] == "warehouse"):
         p.target_kind, p.target, p.concept, p.concept_query = "concept", best[0], best[0], best[1]
         if best[0] == "warehouse" and p.min_height_m is not None:
             p.target_kind, p.target = "buildings", "warehouse"
         return p
-    cat = next((k for k, v in pc["categories"].items() if any(re.search(rf"\b{re.escape(w)}\b", core) for w in v["words"])), None)
+    cat = next((k for k, v in pc["categories"].items() if whole in v["words"]), None)
     if bkind:
         p.target_kind, p.target = "buildings", bkind
     elif cat:

@@ -37,6 +37,24 @@ API with one honest response envelope, so an AI agent (via MCP) can drive the sa
 - **Contract:** every tool returns one envelope: status, confidence, method, assumptions, limits, sources, timed steps.
   Versioned (`contract-v0.3`) with fixtures.
 
+## Checkpoint numbers (2026-11-08, `demo-final`; supersede older numbers below where they differ)
+- **Count, not a top-k:** "find all" in a place scores every chip and cell (Ballantyne: 1,318 chips / 84,352 cells), then
+  dense mode re-checks every pool-coloured blob in a window centred on it. Ballantyne: **373 pools**.
+- **Recall gains (real runs):** Ballantyne OSM pools found 16/28 → **19/28** with dense; backyard-only 8/16 → **11/16**;
+  Lake Norman hand labels 41/51 → **46/51**, no look-alikes counted.
+- **Precision by eye:** top 50 ~49/50; objects added by dense ~38/50; whole Ballantyne set estimated ~87%.
+- **Heights:** USGS 3DEP lidar (public domain) gives height above ground at 1 m: a pool must sit at ground level, which
+  removed 119 roof false positives (561 → 442) at equal recall. Uptown building heights: median 3.9 m from Overture's,
+  Bank of America Corporate Center 253 m (published 265 m incl. spire).
+- **Find anything:** Grounding DINO + SAM 2.1 for concepts never configured; boat docks 12/12 and school bus lots 11/12
+  by eye; most other concepts are labelled low confidence (< 7/12).
+- **Drive time:** Valhalla (MIT) on OpenStreetMap roads: "houses within 10 minutes of Ardrey Kell High School" →
+  13,166 houses.
+- **Typed demo chain:** 10 typed requests + 3 refines, each < 1 s warm (p95 0.97 s for the drive-time step);
+  declines 49/49 on the planner test set.
+- **Fully local:** imagery tiles from local NAIP files: p95 **1,172 ms → 88 ms**; the whole demo passes with Planetary
+  Computer blocked.
+
 ## Evaluation numbers
 - Slice measurements (real runs). Pools in the top 24 whose matched cell is on a pool, counted by eye, south-Charlotte
   residential slice:

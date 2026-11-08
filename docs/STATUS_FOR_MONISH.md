@@ -1,6 +1,14 @@
-# Status for Monish: master build queue (started 2026-11-07 20:40 ET)
+# Status for Monish
 
-Older status (Part 1, contract v0.4) is in git history (`git show ce3359f:docs/STATUS_FOR_MONISH.md`).
+## Competition-ready checkpoint (2026-11-08): see docs/HANDOFF.md for the full picture
+- Feature work is STOPPED at `demo-final`. demo_check passes cold, warm ×2 and offline; the typed chain runs < 1 s per
+  step warm; declines 49/49; Windows free with the API warm 4.9 GB; manifest + rollback tested.
+- Decisions closed by you: PC .wslconfig unchanged (memory fixed in code); PDAL → laspy + lazrs; Grounding DINO +
+  Florence-2 accepted with the legal-review note; Phase 8 paused; Phase 7 inventory not merged (still to eye-check).
+- Background: the Phase 7 inventory job on the laptop (does not touch the demo).
+
+## Earlier phase reports (master build queue)
+
 
 ## Try it now
 - **Demo UI:** http://localhost:8000/. The landing chips are the four measured pool requests (rules planner); solar and parking stay typeable and are marked EXPERIMENTAL.

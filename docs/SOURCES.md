@@ -76,7 +76,7 @@ use, but nothing below is in use yet unless it is listed above. Each item's attr
 | GeoAI `BuildingFootprintExtractor` weights (`giswqs/geoai`, provisional) | MIT | "Building footprint model from GeoAI (giswqs/geoai), MIT License" |
 | segment-geospatial (core only) | MIT | "segment-geospatial © Qiusheng Wu, MIT License" |
 | SAM 1 / SAM 2 / SAM 2.1 weights | Apache-2.0 | "Segment Anything (SAM / SAM 2) © Meta Platforms, Inc., Apache License 2.0" |
-| Grounding DINO (`IDEA-Research/grounding-dino-tiny` / `-base`), pending D1 | Apache-2.0 | "Grounding DINO © IDEA Research, Apache License 2.0" |
+| Grounding DINO (`IDEA-Research/grounding-dino-tiny` / `-base`): ACCEPTED for Groundtruth (2026-11-08): weights Apache/MIT; training data partly research-only; legal review required before ORYN commercial use | Apache-2.0 | "Grounding DINO © IDEA Research, Apache License 2.0" |
 | Florence-2 (`microsoft/Florence-2-base` / `-large`), pending D1 | MIT | "Florence-2 © Microsoft Corporation, MIT License" |
 | Clay v1.5 (`made-with-clay/Clay`) | Apache-2.0 | "Clay Foundation Model v1.5, Apache License 2.0" |
 | TorchGeo (code) | MIT | "TorchGeo © Microsoft Corporation / TorchGeo contributors, MIT License" |
@@ -108,3 +108,7 @@ use, but nothing below is in use yet unless it is listed above. Each item's attr
 - Unclear, pending a decision or verification:
   - GeoAI solar, car and parking weights.
   - Satlas NAIP (ODC-BY), DOFA (CC-BY-4.0 weights), Panopticon and ChesapeakeRSC.
+
+**Decision (Monish, 2026-11-08):** Grounding DINO and Florence-2 are accepted for Groundtruth: weights Apache/MIT;
+training data partly research-only; legal review required before ORYN commercial use. PDAL is not used (laspy +
+lazrs read the 3DEP EPT directly).

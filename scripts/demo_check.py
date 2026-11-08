@@ -30,7 +30,7 @@ def main() -> None:
     ap.add_argument("--record", action="store_true")
     a = ap.parse_args()
     c = httpx.Client(base_url=a.base, timeout=180)
-    for _ in range(240):  # cold start: wait until the API reports healthy (warm-up done)
+    for _ in range(900):  # cold start: wait until the API reports healthy (warm-up done)
         h = c.get("/api/v1/health").json()
         if h.get("ok"):
             break
