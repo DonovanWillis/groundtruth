@@ -33,8 +33,9 @@ W = config.CHIP_PX  # 224
 PATCH = W // 16  # 14 px
 
 
-def dense_dir(place: str, concept: str, year: int) -> Path:
-    return config.DATA / "dense" / place.replace(" ", "_") / f"{concept}_{year}"
+def dense_dir(place: str, concept: str, year: int, root: Path | None = None) -> Path:
+    """Read path (current data version) unless a root is given (a rebuild writes to config.next_data_dir("dense"))."""
+    return (root or config.data_dir("dense")) / place.replace(" ", "_") / f"{concept}_{year}"
 
 
 def available(place: str | None, concept: str | None, year: int) -> bool:
@@ -51,7 +52,7 @@ def _colour_mask(rgb: np.ndarray, rule: dict[str, Any], strip: int = 1024) -> np
 
 
 def build(eng, place: str, concept: str = "swimming_pool", log: Callable[[str], None] = print,
-          batch: int = 64) -> dict[str, Any]:
+          batch: int = 64, out_root: Path | None = None) -> dict[str, Any]:
     from groundtruth.outline import Outliner
 
     t0 = time.perf_counter()
@@ -85,7 +86,7 @@ def build(eng, place: str, concept: str = "swimming_pool", log: Callable[[str], 
     toks = np.concatenate(all_toks) if all_toks else np.zeros((0, 768), np.float16)
     colp = np.concatenate(all_col) if all_col else np.zeros(0, np.float32)
     n = n_blobs
-    out = dense_dir(place, concept, eng.year)
+    out = dense_dir(place, concept, eng.year, out_root or config.next_data_dir("dense"))  # never the version in use
     out.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(out / "proposals.npz", tokens=toks, colour=colp,
                         x_m=np.array([p["x_m"] for p in props]), y_m=np.array([p["y_m"] for p in props]),
@@ -285,6 +286,14 @@ class DenseSet:
         if oc.get("max_height_m") is not None:
             h = self.heights()
             out &= ~(h > float(oc["max_height_m"]))  # NaN (no lidar) passes
+        sh = oc.get("shadow", {})
+        if sh.get("enabled"):  # dark AND next to something lidar-tall → a building shadow, not a pool
+            p = dense_dir(self.meta["place"], self.meta["concept"], self.meta["year"]) / "shadow_v1.npz"
+            if p.exists():
+                z = np.load(p)
+                dark = z["v_mean"] < float(sh.get("v_max", 110))
+                near_tall = z["tall_within_m"] > float(sh.get("tall_m", 8))
+                out &= ~(dark & near_tall)
         return out
 
     def sims(self, qp: np.ndarray) -> np.ndarray:

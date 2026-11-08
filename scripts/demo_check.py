@@ -1,8 +1,10 @@
 """Hero-flow check against the running API, with timings and pass/fail against the latency budget.
 
   python scripts/demo_check.py [--base http://127.0.0.1:8000] [--place Ballantyne] [--record]
-Flow: pick "swimming pool" → pick backyard pool → find_all in <place> → refine ×3 → filter within 1 km of I-485 →
-export CSV → new since 2020. Budgets: pick < 2 s, first results (find_all) < 3 s, refine < 1 s.
+Flow (the demo chain): "find swimming pools" (typed) → pick backyard → Ballantyne (dense) → refine ×3 (Y/N on real
+results) → typed: "pools within 1 km of I-485" → "houses within 10 minutes of Ardrey Kell High School" → "buildings
+taller than 30 m in Uptown" → "boat docks on Lake Norman" → "new pools since 2020 in Ballantyne" → "export them as
+CSV" → "who owns these pools" (must be declined). Every step < 2 s warm (refine < 1 s).
 --record saves every response to data/replay/hero/<n>_<tool>.json for the replay fallback.
 """
 
@@ -18,7 +20,7 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
-BUDGET_MS = {"pick_candidates": 2000, "find_all": 3000, "refine": 1000}
+BUDGET_MS = {"pick_candidates": 2000, "find_all": 2000, "refine": 1000, "filter": 2000, "agent": 2000}
 
 
 def main() -> None:
@@ -34,10 +36,20 @@ def main() -> None:
             break
         time.sleep(1)
     print(f"health ok={h.get('ok')} warmup={h.get('warmup')}")
+    man = ROOT / "data" / "DEMO_MANIFEST.json"
+    man_ok = True
+    if man.exists():  # the demo data must be exactly what demo-final recorded
+        import subprocess
+
+        r = subprocess.run([sys.executable, str(ROOT / "scripts" / "demo_manifest.py"), "verify"], capture_output=True, text=True)
+        print(r.stdout.strip())
+        man_ok = r.returncode == 0
+    else:
+        print("manifest: none yet (written at the checkpoint)")
     idx = [i for i in h["indexes"] if i["year"] == h["primary_year"]]
     aoi = "county" if any(i["aoi"] == "county" for i in idx) else max(idx, key=lambda i: i["chips"])["aoi"]
     place = a.place if aoi == "county" else None
-    rows, ok_all, n = [], True, 0
+    rows, ok_all, n = [], man_ok, 0
     rec = ROOT / "data" / "replay" / "hero"
     if a.record:
         rec.mkdir(parents=True, exist_ok=True)
@@ -69,6 +81,29 @@ def main() -> None:
         return env
 
     print(f"hero flow on aoi={aoi} place={place} ({datetime.now().strftime('%H:%M:%S')})")
+    # ---- typed requests (rules planner), exactly the demo chain; every step < 2 s warm
+    def agent(text: str, ctx: dict | None, lo: int | None, hi: int | None, expect: str = "ok") -> dict:
+        nonlocal ok_all, n
+        n += 1
+        t0 = time.perf_counter()
+        r = c.post("/api/v1/agent/run", json={"text": text, "aoi": aoi, **({"context": ctx} if ctx else {})}).json()
+        ms = (time.perf_counter() - t0) * 1000
+        cur = next((s for s in r["steps"] if s["ref"] == r.get("current_ref")), None)
+        cnt = None
+        if cur is not None:
+            m = cur["envelope"]["result"]["metrics"]
+            cnt = m.get("count_out", m.get("count_detected", m.get("count")))
+        say = next((x["text"] for x in reversed(r["actions"]) if x["action"] == "say"), "")
+        good = r["status"] == expect and (lo is None or (cnt is not None and lo <= cnt <= (hi or 10 ** 9)))
+        within = ms <= BUDGET_MS["agent"]
+        ok_all &= good
+        rows.append({"step": n, "tool": f"agent: {text}", "ms": round(ms), "status": r["status"], "budget_ms": BUDGET_MS["agent"],
+                     "within_budget": within, "count": cnt, "cached": r.get("cached"), "metrics": {"say": say[:200]}})
+        print(f"{n:2d} {'agent':16s} {'PASS' if good else 'FAIL'} {ms:7.0f} ms  budget {BUDGET_MS['agent']} ms "
+              f"{'✓' if within else '✗ OVER'}  '{text}' → {cnt if cnt is not None else r['status']}  {say[:110]}")
+        return r
+
+    agent("find swimming pools", None, 1, 500)
     pc = call("pick_candidates", {"query": "swimming pool"})
     feats = [f for f in pc["result"]["geojson"]["features"] if not f["properties"].get("no_clear_example")]
     pick = next((f for f in feats if f["properties"].get("sense_id") == "backyard_pool"), feats[0])
@@ -94,17 +129,25 @@ def main() -> None:
     n_res = len(res["features"])
     checks.append(("refine features == count_detected", n_res == rf["result"]["metrics"]["count_detected"]))
     checks.append(("refine count ≤ find_all count", n_res <= len(hits)))
+    before = {h["properties"]["example"] for h in hits if h["properties"].get("geometry_kind") == "outline"}
+    kept = [f for f in res["features"] if f["properties"]["example"] in before]
+    kept_outlined = sum(1 for f in kept if f["properties"].get("geometry_kind") == "outline")
+    checks.append((f"refine keeps outlines ({kept_outlined}/{len(kept)} ≥ 95%)", not kept or kept_outlined >= 0.95 * len(kept)))
     flt = call("filter", {"geojson": res, "where": {"within_m_of": {"layer": "osm_i485", "m": 1000}}})
     checks.append(("filter count ≤ total count", flt["result"]["metrics"]["count_out"] <= n_res))
-    exp = call("export", {"geojson": flt["result"]["geojson"], "format": "csv"})
-    checks.append(("export count == filter count", exp["result"]["metrics"]["count"] == flt["result"]["metrics"]["count_out"]))
+
+    agent("pools within 1 km of I-485", {"place": place}, 1, 400)
+    agent("houses within 10 minutes of Ardrey Kell High School", None, 1000, 60000)
+    agent("buildings taller than 30 m in Uptown", None, 10, 2000)
+    agent("boat docks on Lake Norman", None, 10, 5000)
+    last = "new pools since 2020 in Ballantyne"
+    agent(last, None, 1, 2000)
+    ex_r = agent("export them as CSV", {"place": place, "last_text": last}, 1, 2000)
+    checks.append(("export offers a CSV download", any(x["action"] == "offer_download" for x in ex_r["actions"])))
+    agent("who owns these pools", {"place": place}, None, None, expect="declined")
     for name, ok in checks:
         print(f"   check: {name}: {'OK' if ok else 'FAIL'}")
         ok_all &= ok
-    exs = [f["properties"].get("example") or f"{f['properties']['chip_id']}#{f['properties']['cell']}"
-           for f in flt["result"]["geojson"]["features"]][:100]
-    if exs:
-        call("compare_years", {"examples": exs, "from_year": 2020, "concept": concept})
     slow = [r for r in rows if not r["within_budget"]]
     print(f"RESULT: {'PASS' if ok_all else 'FAIL'}; over budget: {[(r['tool'], r['ms']) for r in slow] or 'none'}")
     out = ROOT / "data" / "out" / f"demo_check_{datetime.now().strftime('%H%M%S')}.json"

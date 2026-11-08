@@ -17,7 +17,7 @@ from groundtruth import config  # noqa: E402
 from groundtruth.vector import store  # noqa: E402
 
 conf = json.loads((config.SENSES_PATH.parent / "vector_tiles.json").read_text())
-out_dir = config.DATA / "tiles"
+out_dir = config.next_data_dir("tiles")  # a NEW version; switch conf/data_versions.json after checking
 out_dir.mkdir(parents=True, exist_ok=True)
 only = set(sys.argv[1:])
 for name, c in conf["layers"].items():

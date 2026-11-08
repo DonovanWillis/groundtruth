@@ -228,12 +228,22 @@ def _warmup() -> None:
                 for pl in json.loads((config.SENSES_PATH.parent / "places.json").read_text())["places"]:
                     idle()
                     e.find_all([ex], [], place=pl, concept="swimming_pool", soft_exclude=neg)
-                for chip in ("find swimming pools", "pools within 1 km of I-485 in Ballantyne",
-                             "pools in flood zones in Matthews", "new pools since 2020 in Ballantyne",
-                             "boat docks on Lake Norman"):
+                # landing chips + the typed demo chain, with the contexts the UI sends (planner results are cached)
+                for chip, ctx in (("find swimming pools", None), ("pools within 1 km of I-485 in Ballantyne", None),
+                                  ("pools in flood zones in Matthews", None), ("new pools since 2020 in Ballantyne", None),
+                                  ("boat docks on Lake Norman", None),
+                                  ("pools within 1 km of I-485", {"place": WARM["place"]}),
+                                  ("houses within 10 minutes of Ardrey Kell High School", None),
+                                  ("buildings taller than 30 m in Uptown", None),
+                                  ("export them as CSV", {"place": WARM["place"],
+                                                          "last_text": "new pools since 2020 in Ballantyne"})):
                     idle()
-                    plan_run(lambda year: eng(None, year), chip)
+                    plan_run(lambda year: eng(None, year), chip, ctx)
                 WARM["places_ms"] = round((_t.perf_counter() - t0) * 1000)
+            # results are cached now: hand the index file pages back (page cache → Windows), incl. the 2020 index
+            e.index.release_pages()
+            for other in e.__dict__.get("_other_index", {}).values():
+                other.release_pages()
         except Exception as err:  # never block health forever; report it
             WARM["error"] = f"{type(err).__name__}: {err}"[:300]
         finally:
@@ -305,6 +315,7 @@ def events() -> Response:
 class AgentIn(BaseModel):
     text: str
     aoi: str | None = None
+    context: dict[str, Any] | None = None  # {place, last_text} from the UI
 
 
 @app.post("/api/v1/agent/run")
@@ -312,7 +323,7 @@ def agent_run(b: AgentIn) -> JSONResponse:
     """Rules planner (deterministic, no LLM): parse → real tool calls → map actions citing step envelopes."""
     from groundtruth.planner import run as plan_run
 
-    return JSONResponse(plan_run(lambda year: eng(b.aoi, year), b.text))
+    return JSONResponse(plan_run(lambda year: eng(b.aoi, year), b.text, b.context))
 
 
 # ---------------- tools ----------------
@@ -495,7 +506,7 @@ _PMT: dict[str, Any] = {}
 def vector_tile(layer: str, z: int, x: int, y: int) -> Response:
     from pmtiles.reader import MmapSource, Reader
 
-    p = config.DATA / "tiles" / f"{layer}.pmtiles"
+    p = config.data_dir("tiles") / f"{layer}.pmtiles"
     if not p.exists() or "/" in layer or ".." in layer:
         raise HTTPException(404, f"no vector tiles for {layer!r}")
     if layer not in _PMT:
@@ -512,7 +523,7 @@ def vector_tile(layer: str, z: int, x: int, y: int) -> Response:
 def vector_tile_layers() -> dict[str, Any]:
     conf = json.loads((config.SENSES_PATH.parent / "vector_tiles.json").read_text())["layers"]
     return {k: {"minzoom": v["minzoom"], "maxzoom": v["maxzoom"], "url": f"/api/v1/vt/{k}/{{z}}/{{x}}/{{y}}.pbf"}
-            for k, v in conf.items() if (config.DATA / "tiles" / f"{k}.pmtiles").exists()}
+            for k, v in conf.items() if (config.data_dir("tiles") / f"{k}.pmtiles").exists()}
 
 
 @app.get("/api/v1/boundary")

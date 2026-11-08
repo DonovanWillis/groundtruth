@@ -15,7 +15,9 @@ import osmium
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
-out = DATA / "routing"
+_r = DATA / "routing"
+_ns = [int(p.name[1:]) for p in _r.glob("v*") if p.name[1:].isdigit()] if _r.exists() else []
+out = _r / f"v{(max(_ns) if _ns else 0) + 1}"  # rebuilds go to a NEW version (conf/data_versions.json picks it)
 out.mkdir(parents=True, exist_ok=True)
 boundary = json.loads((DATA / "boundary" / "mecklenburg.geojson").read_text())
 from shapely.geometry import shape  # noqa: E402

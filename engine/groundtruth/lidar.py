@@ -18,7 +18,7 @@ def _places() -> dict[str, Any]:
 
 
 def built_places() -> list[str]:
-    d = config.DATA / "lidar"
+    d = config.data_dir("lidar")
     return sorted(p.name.replace("_", " ") for p in d.iterdir() if (p / "ndsm.tif").exists()) if d.exists() else []
 
 
@@ -29,7 +29,7 @@ def place_for(bbox: Sequence[float] | None) -> str | None:
     cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
     for name in built_places():
         try:
-            b = json.loads((config.DATA / "lidar" / name.replace(" ", "_") / "meta.json").read_text())["bbox"]
+            b = json.loads((config.data_dir("lidar") / name.replace(" ", "_") / "meta.json").read_text())["bbox"]
         except (OSError, KeyError):
             b = _places().get(name, {}).get("bbox")
         if b and b[0] <= cx <= b[2] and b[1] <= cy <= b[3]:
@@ -44,7 +44,7 @@ def available_for(bbox: Sequence[float] | None) -> bool:
 def raster(place: str, kind: str = "ndsm"):
     import rasterio
 
-    return rasterio.open(config.DATA / "lidar" / place.replace(" ", "_") / f"{kind}.tif")
+    return rasterio.open(config.data_dir("lidar") / place.replace(" ", "_") / f"{kind}.tif")
 
 
 _ARR: dict[tuple[str, str], tuple[np.ndarray, Any]] = {}

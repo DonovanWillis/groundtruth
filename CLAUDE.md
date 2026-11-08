@@ -20,6 +20,15 @@
 - Commit small and often, push after each working step, and log each milestone with a timestamp in
   `docs/BUILD_LOG.md`.
 
+## The demo is frozen
+- **Upgrades happen on branches.** The `demo-final` tag and the data it uses (listed with checksums in
+  `data/DEMO_MANIFEST.json`) are never modified or deleted. Rebuilt data goes to a new `data/<kind>/vN/` folder and is
+  switched in `engine/groundtruth/conf/data_versions.json` only on a branch, after A/B + `scripts/demo_check.sh`.
+- `scripts/rollback_demo.sh` restores demo-final (code + data versions) and runs demo_check.
+- **Only ONE Claude Code session on this PC at a time.**
+- Heavy CPU builds run on the laptop (`scripts/heavy/`); the PC keeps the API, UI, label server and GPU work (one GPU
+  job at a time).
+
 ## Labelling data is sacred
 - `data/labels/` is the human-made test set. Never auto-label it, never rewrite it from code other than the
   label store, never delete it. The label store writes a journal + atomic snapshot + backup on every change.

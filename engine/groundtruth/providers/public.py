@@ -296,7 +296,7 @@ class PublicDataProvider(DataProvider):
     def _valhalla(self):
         import valhalla
 
-        cfg = self.data / "routing" / "valhalla.json"
+        cfg = config.data_dir("routing") / "valhalla.json"
         if not cfg.exists():
             raise FileNotFoundError("no routing graph: run scripts/build_routing.py (gt-routing env)")
         return valhalla.Actor(str(cfg))

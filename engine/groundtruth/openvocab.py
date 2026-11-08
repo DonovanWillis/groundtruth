@@ -30,20 +30,59 @@ def conf() -> dict[str, Any]:
 
 
 class Detector:
+    """Grounding DINO, loaded lazily on first use and unloaded after ``idle_unload_min`` minutes without use
+    (conf/openvocab.json): it is not on the demo's hot path (boat docks are served from the disk cache)."""
+
     _lock = threading.Lock()
 
     def __init__(self, model_id: str, device: str | None = None) -> None:
         self.model_id = model_id
         self.device_name = pick_device(device)
         self.device = torch_device(self.device_name)
+        self._m = None
+        self.last_used = 0.0
+        self._timer: threading.Timer | None = None
 
-    @cached_property
+    @property
     def _model(self):
-        from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+        if self._m is None:
+            from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 
-        proc = AutoProcessor.from_pretrained(self.model_id)
-        model = AutoModelForZeroShotObjectDetection.from_pretrained(self.model_id).to(self.device).eval()
-        return proc, model
+            proc = AutoProcessor.from_pretrained(self.model_id)
+            model = AutoModelForZeroShotObjectDetection.from_pretrained(self.model_id).to(self.device).eval()
+            self._m = (proc, model)
+        self.last_used = time.time()
+        self._arm_unload()
+        return self._m
+
+    def _arm_unload(self) -> None:
+        mins = float(conf().get("idle_unload_min", 5))
+        if mins <= 0:
+            return
+        if self._timer is not None:
+            self._timer.cancel()
+        self._timer = threading.Timer(mins * 60, self.unload_if_idle, args=(mins,))
+        self._timer.daemon = True
+        self._timer.start()
+
+    def unload_if_idle(self, mins: float) -> None:
+        with self._lock:
+            if self._m is not None and time.time() - self.last_used >= mins * 60 - 1:
+                self._m = None
+                import gc
+
+                gc.collect()
+                try:
+                    import torch
+
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+
+    @property
+    def loaded(self) -> bool:
+        return self._m is not None
 
     def detect(self, images: Sequence[Image.Image], prompt: str, box_th: float, text_th: float):
         """→ per image: (boxes xyxy px (k,4), scores (k,))."""
@@ -83,7 +122,35 @@ def concept_entry(text: str) -> dict[str, Any]:
     return {"key": t, "prompt": t}
 
 
+def _disk_key(text: str, bbox, year: int) -> str:
+    import hashlib
+
+    c = conf()
+    blob = json.dumps({"t": concept_entry(text), "b": [round(v, 6) for v in bbox] if bbox else None, "y": year,
+                       "c": {k: c[k] for k in ("detector", "top_k_chips", "place_max_chips", "box_threshold",
+                                               "text_threshold", "max_box_frac", "min_box_px", "nms_m",
+                                               "clip_mask_to_box", "clip_verify") if k in c}}, sort_keys=True)
+    return hashlib.sha1(blob.encode()).hexdigest()[:16]
+
+
 def find_anything(eng, text: str, bbox: Sequence[float] | None, place: str | None, log=None) -> tuple[list[dict], dict]:
+    """Disk-cached (data/cache/openvocab/<version>/, keyed by text + area + year + detector config): a cached answer
+    never loads the detector. → (features EPSG:4326, info)."""
+    d = config.DATA / "cache" / "openvocab" / config.data_version("openvocab_cache")
+    p = d / f"{_disk_key(text, bbox, eng.year)}.json"
+    if p.exists():
+        out = json.loads(p.read_text())
+        out["info"]["from_disk_cache"] = True
+        return out["features"], out["info"]
+    feats, info = _find_anything(eng, text, bbox, place, log)
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"features": feats, "info": info}))
+    tmp.replace(p)
+    return feats, info
+
+
+def _find_anything(eng, text: str, bbox: Sequence[float] | None, place: str | None, log=None) -> tuple[list[dict], dict]:
     """→ (features EPSG:4326, info). Features use index ids ``chip#cell:patch`` at the object centre."""
     c = conf()
     ce = concept_entry(text)

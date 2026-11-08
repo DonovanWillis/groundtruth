@@ -989,7 +989,10 @@ class Engine:
 
         if dense is False or not D.available(place, concept, self.year):
             return False
-        return bool(dense) or bool(concept_conf(concept).get("dense", {}).get("auto", True))
+        dc = concept_conf(concept).get("dense", {})
+        if place in dc.get("disabled_places", []) and not dense:  # measured worse there; explicit dense=true still works
+            return False
+        return bool(dense) or bool(dc.get("auto", True))
 
     def _merge_dense(self, out: list[dict[str, Any]], pos, neg, place: str, concept: str, smin: float, soft=()):
         from groundtruth import dense as D
@@ -1020,13 +1023,18 @@ class Engine:
             conf = float(np.clip(0.5 + (float(S[k]) - smin) / 0.3, 0, 1)) * (0.5 + 0.5 * float(p.get("sam_score", 0)))
             p.update(example=ids[k], dense_id=f["id"], score=round(float(S[k]), 4), patch_sim=round(float(S[k]), 4),
                      colour=round(float(ds.colour[k]), 3), confidence=round(conf, 3), geometry_kind="outline")
+            # matched ⇒ passed the dense verifier (current thresholds), whatever the build-time strict check said
+            p["object_check"] = {**p.get("object_check", {}), "pass": True, "reason": "ok (dense verifier)"}
+            reg = self.__dict__.setdefault("_dense_by_id", {})  # refine re-scores these without losing the outline
             near = (((std_pts - (p["x_m"], p["y_m"])) ** 2).sum(1) < r2) if len(std_pts) else np.zeros(0, bool)
             if near.any():
                 j = int(np.argmax(near))
                 if merged[j]["properties"].get("geometry_kind") != "outline":  # dense outline replaces a pending box
                     merged[j] = {**f, "id": merged[j].get("id", f["id"])}
+                    reg[p["example"]] = merged[j]
                     replaced += 1
                 continue
+            reg[p["example"]] = f
             merged.append(f)
             std_pts = np.vstack([std_pts, (p["x_m"], p["y_m"])]) if len(std_pts) else np.array([[p["x_m"], p["y_m"]]])
             added += 1
@@ -1220,10 +1228,16 @@ class Engine:
                 prob = 1.0 if ex in acc_ids else float(P[j])
                 sims = A @ self.index.cells(i)[c]
                 b = int(np.argmax(sims))
-                feat, chk = self._object_feature(i, c, p, prob, 0, concept, prob, {
-                    "accepted": ex in acc_ids,
-                    "why": {"nearest_accepted": sess.accept[b] if b < len(sess.accept) else None,
-                            "similarity": round(float(sims[b]), 3)}})
+                extra = {"accepted": ex in acc_ids,
+                         "why": {"nearest_accepted": sess.accept[b] if b < len(sess.accept) else None,
+                                 "similarity": round(float(sims[b]), 3)}}
+                dense_f = self.__dict__.get("_dense_by_id", {}).get(ex)
+                if dense_f is not None:  # keep the dense outline + its verification (no fallback to a pending box)
+                    feat = json.loads(json.dumps(dense_f))
+                    feat["properties"].update(extra, score=round(prob, 4))
+                    chk = feat["properties"].get("object_check")
+                else:
+                    feat, chk = self._object_feature(i, c, p, prob, 0, concept, prob, extra)
                 if chk is not None and not chk["pass"]:
                     rejected_check += 1
                     continue
@@ -1715,7 +1729,7 @@ class Engine:
                    "tree_height_m_median": round(float(np.median(h)), 1) if len(h) else None,
                    "tree_height_m_p90": round(float(np.percentile(h, 90)), 1) if len(h) else None,
                    "tree_height_m_max": round(float(h.max()), 1) if len(h) else None, "min_tree_m": min_tree_m}
-        meta = json.loads((config.DATA / "lidar" / lp.replace(" ", "_") / "meta.json").read_text())
+        meta = json.loads((config.data_dir("lidar") / lp.replace(" ", "_") / "meta.json").read_text())
         return self._env(tool, status="ok", result=Result(geojson=feature_collection([]), metrics=metrics),
                          confidence=0.8,
                          method=f"USGS 3DEP lidar nDSM at 1 m: canopy = height ≥ {min_tree_m} m, excluding Overture building "

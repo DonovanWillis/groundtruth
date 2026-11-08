@@ -50,3 +50,35 @@ def test_find_all_fixture_count_matches_features():
     m = resp["result"]["metrics"]
     n = len(resp["result"]["geojson"]["features"]) + resp.get("_fixture", {}).get("truncated_features", 0)
     assert n == m["count_detected"]
+
+
+def test_refine_keeps_dense_outline():
+    """A dense object re-scored by refine keeps its dense outline and verification (no fallback to a pending box)."""
+    import numpy as np
+
+    from groundtruth.tools import Engine, Session
+
+    class _Idx:
+        ids = ["2022_e1_n1"]
+        pos = {"2022_e1_n1": 0}
+        n_cells = 4
+        grid = 2
+
+        def cells(self, i):
+            return np.eye(4, dtype=np.float32)
+
+        def __len__(self):
+            return 1
+
+    e = Engine.__new__(Engine)
+    e.provider, e.year, e.aoi = _Prov(), 2022, "test"
+    e.index = _Idx()
+    dense = {"type": "Feature", "id": "dense:1,1", "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [0, 1e-4], [1e-4, 1e-4], [1e-4, 0], [0, 0]]]},
+             "properties": {"example": "2022_e1_n1#1:5", "geometry_kind": "outline", "dense_id": "dense:1,1",
+                            "object_check": {"pass": True, "reason": "ok (dense verifier)"}, "area_m2": 40.0}}
+    e._dense_by_id = {"2022_e1_n1#1:5": dense}
+    sess = Session("s")
+    sess.accept = ["2022_e1_n1#0"]
+    env = e._refine_objects("s", sess, [(0, 0)], [], ["2022_e1_n1#1:5"], None)
+    f = env.result.geojson["features"]
+    assert f and f[0]["properties"]["geometry_kind"] == "outline" and f[0]["properties"].get("dense_id") == "dense:1,1"

@@ -20,6 +20,8 @@ want = sys.argv[1:] or list(places)
 prov = PublicDataProvider(download_scenes=False)
 # dense build needs only the provider, the year and place boxes: no chip index (saves ~5 GB RAM)
 eng = SimpleNamespace(provider=prov, year=prov.primary_year, place_bbox=lambda p: places[p]["bbox"])
+OUT = config.next_data_dir("dense")  # a NEW version; switch conf/data_versions.json only after A/B + demo_check
+print(f"writing to {OUT}", flush=True)
 for pl in want:
     bb = tuple(places[pl]["bbox"])
     missing = [s.scene_id for s in prov.list_scenes(bb, eng.year) if not prov.local_scene_path(s.scene_id, eng.year).exists()]
@@ -27,6 +29,6 @@ for pl in want:
         print(f"SKIP {pl}: {len(missing)} scene(s) not local yet ({missing[0]} …)", flush=True)
         continue
     t0 = time.time()
-    meta = build(eng, pl, "swimming_pool", log=lambda s: print(s, flush=True))
+    meta = build(eng, pl, "swimming_pool", log=lambda s: print(s, flush=True), out_root=OUT)
     print(f"DONE {pl} in {time.time() - t0:.0f} s: {meta['proposals']} proposals, {meta['passed_verifier']} verified",
           flush=True)

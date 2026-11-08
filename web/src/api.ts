@@ -126,11 +126,11 @@ export type AgentResponse = {
 };
 
 /** POST /api/v1/agent/run: the server-side deterministic rules planner (no LLM). */
-export async function agentRun(text: string, aoi?: string): Promise<AgentResponse> {
+export async function agentRun(text: string, aoi?: string, context?: { place?: string | null; last_text?: string | null }): Promise<AgentResponse> {
   const r = await fetch(`${BASE}/agent/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, ...(aoi ? { aoi } : {}) }),
+    body: JSON.stringify({ text, ...(aoi ? { aoi } : {}), ...(context ? { context } : {}) }),
   });
   if (!r.ok) throw new Error(`agent/run: HTTP ${r.status} ${(await r.text()).slice(0, 240)}`);
   return r.json();
