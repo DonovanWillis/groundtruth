@@ -13,12 +13,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "engine"))
 from groundtruth import config  # noqa: E402
 from groundtruth.dense import build  # noqa: E402
 from groundtruth.providers.public import PublicDataProvider  # noqa: E402
-from groundtruth.tools import Engine  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
 
 places = json.loads((config.SENSES_PATH.parent / "places.json").read_text())["places"]
 want = sys.argv[1:] or list(places)
 prov = PublicDataProvider(download_scenes=False)
-eng = Engine(prov, aoi="county")
+# dense build needs only the provider, the year and place boxes: no chip index (saves ~5 GB RAM)
+eng = SimpleNamespace(provider=prov, year=prov.primary_year, place_bbox=lambda p: places[p]["bbox"])
 for pl in want:
     bb = tuple(places[pl]["bbox"])
     missing = [s.scene_id for s in prov.list_scenes(bb, eng.year) if not prov.local_scene_path(s.scene_id, eng.year).exists()]

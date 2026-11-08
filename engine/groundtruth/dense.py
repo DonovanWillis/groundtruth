@@ -52,10 +52,7 @@ def _colour_mask(rgb: np.ndarray, rule: dict[str, Any], strip: int = 1024) -> np
 
 def build(eng, place: str, concept: str = "swimming_pool", log: Callable[[str], None] = print,
           batch: int = 64) -> dict[str, Any]:
-    from scipy import ndimage
-
     from groundtruth.outline import Outliner
-    from groundtruth.rerank import dino_tokens
 
     t0 = time.perf_counter()
     cc = concept_conf(concept)
@@ -66,21 +63,68 @@ def build(eng, place: str, concept: str = "swimming_pool", log: Callable[[str], 
     bb = eng.place_bbox(place)
     g = config.GSD_M
     mx = to_measure(box(*bb)).bounds
-    m = 70.0  # margin so objects on the edge get a full window
-    x0, y0 = np.floor((mx[0] - m) / g) * g, np.floor((mx[1] - m) / g) * g
-    x1, y1 = np.ceil((mx[2] + m) / g) * g, np.ceil((mx[3] + m) / g) * g
+    # blocks of block_m (default 1.8 km) so memory stays flat for big places; each blob belongs to the block whose
+    # core holds its centroid, and every block is read with a 140 m margin (> half a window + the largest blob)
+    bm = float(dc.get("block_m", 1800.0))
+    xs = list(np.arange(mx[0], mx[2], bm)) or [mx[0]]
+    ys = list(np.arange(mx[1], mx[3], bm)) or [mx[1]]
+    outl = Outliner()
+    all_props, all_toks, all_col, all_feats = [], [], [], []
+    n_blobs, t_read, t_emb, t_sam, raster_px = 0, 0.0, 0.0, 0.0, 0
+    a_lo = float(dc.get("blob_area_min_m2", oc.get("colour_area_min_m2", 6)))
+    a_hi = float(dc.get("blob_area_max_m2", 1.5 * oc.get("area_m2", [0, 2000])[1]))
+    for bx in xs:
+        for by in ys:
+            core = (bx, by, min(bx + bm, mx[2]), min(by + bm, mx[3]))
+            r = _block(eng, rule, oc, core, a_lo, a_hi, outl, batch)
+            all_props += r["props"]; all_toks.append(r["toks"]); all_col.append(r["colp"]); all_feats += r["feats"]
+            n_blobs += r["n"]; t_read += r["t_read"]; t_emb += r["t_emb"]; t_sam += r["t_sam"]; raster_px += r["px"]
+            log(f"  block {core[0]:.0f},{core[1]:.0f}: {r['n']} blobs → {len(r['props'])} proposals "
+                f"(total {len(all_props)}; read {t_read:.0f} s, embed {t_emb:.0f} s, SAM+verify {t_sam:.0f} s)")
+    props, feats = all_props, all_feats
+    toks = np.concatenate(all_toks) if all_toks else np.zeros((0, 768), np.float16)
+    colp = np.concatenate(all_col) if all_col else np.zeros(0, np.float32)
+    n = n_blobs
+    out = dense_dir(place, concept, eng.year)
+    out.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(out / "proposals.npz", tokens=toks, colour=colp,
+                        x_m=np.array([p["x_m"] for p in props]), y_m=np.array([p["y_m"] for p in props]),
+                        passed=np.array([f["properties"]["object_check"]["pass"] for f in feats], bool))
+    (out / "outlines.json").write_text(json.dumps(feats))
+    meta = {"version": DENSE_VERSION, "place": place, "concept": concept, "year": eng.year, "bbox": list(bb),
+            "raster_mp": round(raster_px / 1e6, 1), "blocks": len(xs) * len(ys), "block_m": bm,
+            "colour_blobs": int(n), "proposals": len(props),
+            "passed_verifier": int(sum(f["properties"]["object_check"]["pass"] for f in feats)),
+            "blob_area_m2": [a_lo, a_hi], "ms_read": round(t_read * 1000), "ms_embed": round(t_emb * 1000),
+            "ms_sam_verify": round(t_sam * 1000), "ms_total": round((time.perf_counter() - t0) * 1000),
+            "device": outl.device_name, "built": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "concept_conf": cc}
+    (out / "meta.json").write_text(json.dumps(meta, indent=1))
+    log(f"{place}: {meta['proposals']} proposals, {meta['passed_verifier']} pass the verifier; {meta['ms_total'] / 1000:.0f} s")
+    return meta
+
+
+def _block(eng, rule, oc, core, a_lo: float, a_hi: float, outl, batch: int) -> dict[str, Any]:
+    """Proposals whose blob centroid lies in ``core`` (EPSG:32617): read core + 140 m, colour blobs, centred windows →
+    DINOv2 token + SAM outline + verifier."""
+    from scipy import ndimage
+
+    from groundtruth.rerank import dino_tokens
+
+    g = config.GSD_M
+    m = 140.0
+    t0 = time.perf_counter()
+    x0, y0 = np.floor((core[0] - m) / g) * g, np.floor((core[1] - m) / g) * g
+    x1, y1 = np.ceil((core[2] + m) / g) * g, np.ceil((core[3] + m) / g) * g
     im = eng.provider.read_grid((x0, y0, x1, y1), eng.year)
     rgb, valid = im.rgb, im.meta["valid"]
-    H, Wd = rgb.shape[:2]
     t_read = time.perf_counter() - t0
-    log(f"{place}: raster {Wd}×{H} px ({(Wd * H) / 1e6:.0f} MP) read in {t_read:.0f} s")
+    mx = core
     # 2. colour blobs
     cmask = _colour_mask(rgb, rule) & valid
     lab, n = ndimage.label(cmask, structure=np.ones((3, 3)))
     px_area = g * g
     sizes = ndimage.sum_labels(np.ones_like(lab, np.float32), lab, index=np.arange(1, n + 1)) * px_area
-    a_lo = float(dc.get("blob_area_min_m2", oc.get("colour_area_min_m2", 6)))
-    a_hi = float(dc.get("blob_area_max_m2", 1.5 * oc.get("area_m2", [0, 2000])[1]))
     keep = [k + 1 for k in range(n) if a_lo <= sizes[k] <= a_hi]
     objs = ndimage.find_objects(lab)
     props = []
@@ -88,18 +132,17 @@ def build(eng, place: str, concept: str = "swimming_pool", log: Callable[[str], 
         sl = objs[lbl - 1]
         rr, cc_ = np.nonzero(lab[sl] == lbl)
         r_c, c_c = sl[0].start + rr.mean(), sl[1].start + cc_.mean()
-        # inside the margin-free place box only (the margin is context)
+        # centroid in this block's core only (half-open, so a blob on a core edge is counted once)
         xm, ym = x0 + (c_c + 0.5) * g, y1 - (r_c + 0.5) * g
-        if not (mx[0] <= xm <= mx[2] and mx[1] <= ym <= mx[3]):
+        if not (mx[0] <= xm < mx[2] and mx[1] <= ym < mx[3]):
             continue
         props.append({"r": float(r_c), "c": float(c_c), "x_m": float(xm), "y_m": float(ym), "blob_m2": float(sizes[lbl - 1]),
                       "bbox_px": [sl[1].start, sl[0].start, sl[1].stop, sl[0].stop]})
-    log(f"{place}: {n} colour blobs → {len(props)} proposals in the area range {a_lo:.0f}–{a_hi:.0f} m²")
+    del lab
     # 3. centred windows → DINOv2 token + SAM outline + verifier
     pad = W
     rgbp = np.pad(rgb, ((pad, pad), (pad, pad), (0, 0)))
     cmp_ = np.pad(cmask, ((pad, pad), (pad, pad)))
-    outl = Outliner()
     toks = np.zeros((len(props), 768), np.float16)
     colp = np.zeros(len(props), np.float32)
     feats = []
@@ -128,23 +171,8 @@ def build(eng, place: str, concept: str = "swimming_pool", log: Callable[[str], 
             ts = time.perf_counter()
             feats.append(_outline_one(outl, wins[j], cw, p, x0, y1, oc))
             t_sam += time.perf_counter() - ts
-        log(f"  {min(k0 + batch, len(props))}/{len(props)} proposals (embed {t_emb:.0f} s, SAM+verify {t_sam:.0f} s)")
-    out = dense_dir(place, concept, eng.year)
-    out.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(out / "proposals.npz", tokens=toks, colour=colp,
-                        x_m=np.array([p["x_m"] for p in props]), y_m=np.array([p["y_m"] for p in props]),
-                        passed=np.array([f["properties"]["object_check"]["pass"] for f in feats], bool))
-    (out / "outlines.json").write_text(json.dumps(feats))
-    meta = {"version": DENSE_VERSION, "place": place, "concept": concept, "year": eng.year, "bbox": list(bb),
-            "raster_px": [Wd, H], "colour_blobs": int(n), "proposals": len(props),
-            "passed_verifier": int(sum(f["properties"]["object_check"]["pass"] for f in feats)),
-            "blob_area_m2": [a_lo, a_hi], "ms_read": round(t_read * 1000), "ms_embed": round(t_emb * 1000),
-            "ms_sam_verify": round(t_sam * 1000), "ms_total": round((time.perf_counter() - t0) * 1000),
-            "device": outl.device_name, "built": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            "concept_conf": cc}
-    (out / "meta.json").write_text(json.dumps(meta, indent=1))
-    log(f"{place}: {meta['proposals']} proposals, {meta['passed_verifier']} pass the verifier; {meta['ms_total'] / 1000:.0f} s")
-    return meta
+    return {"props": props, "toks": toks, "colp": colp, "feats": feats, "n": int(len(keep)), "t_read": t_read,
+            "t_emb": t_emb, "t_sam": t_sam, "px": int(rgb.shape[0] * rgb.shape[1])}
 
 
 def _outline_one(outl, win: np.ndarray, cwin: np.ndarray, p: dict[str, Any], x0: float, y1: float,
