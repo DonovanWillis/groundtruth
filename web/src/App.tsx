@@ -1,6 +1,6 @@
 import { MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Bbox, Envelope, FC, Feature, Health, boxPoly, exampleOf, health, places as fetchPlaces, setThumbAoi, sleep, thumb, tool,
+  Bbox, Envelope, FC, Feature, Health, boxPoly, cellBboxOf, exampleOf, shapeOf, health, places as fetchPlaces, setThumbAoi, sleep, thumb, tool,
 } from "./api";
 import { AgentTarget, runRulesPlanner } from "./agent";
 import {
@@ -95,6 +95,8 @@ export default function App() {
   const [compare, setCompare] = useState<"off" | "loading" | "on">("off");
   const [compareNote, setCompareNote] = useState<string | null>(null);
   const [layersOpen, setLayersOpen] = useState(() => window.innerHeight > 860 && window.innerWidth > 1400);
+  // Spotlight: dim the imagery while results are showing (?spotlight=0 turns it off for a link).
+  const [spotlight, setSpotlight] = useState(() => new URLSearchParams(window.location.search).get("spotlight") !== "0");
 
   // ---------------- agent ----------------
   const [agentMsgs, setAgentMsgs] = useState<AgentMsg[]>([]);
@@ -177,20 +179,28 @@ export default function App() {
   }, [counted, outlines, pool]);
 
   // ---------------- map sync ----------------
+  // Results you ✗ stay on the map, faded out (refine may drop them from `results`, so remember what they looked like).
+  const seenRef = useRef<Record<string, Feature>>({});
+  useEffect(() => {
+    if (!results.length && !rejected.length) seenRef.current = {};
+    for (const f of results) seenRef.current[exampleOf(f)] = f;
+  }, [results, rejected]);
+  useEffect(() => { mv.current?.setSpotlight(spotlight); }, [spotlight]);
   useEffect(() => {
     const feats: Feature[] = [];
-    for (const f of pool) {
+    const push = (f: Feature, state: string) => {
       const ex = exampleOf(f);
       const o = outlines[ex];
-      const isAcc = accSet.has(ex);
-      feats.push({ type: "Feature", geometry: o?.geometry ?? boxPoly(f.properties.cell_bbox), properties: {
-        example: ex, kind: o?.geometry ? "outline" : "cell", state: isAcc ? "accepted" : "hit",
+      feats.push({ type: "Feature", geometry: o?.geometry ?? shapeOf(f), properties: {
+        example: ex, kind: o?.geometry ? "outline" : "cell", state, area_m2: o?.area_m2 ?? null,
         change: compare === "on" ? changes[ex] ?? "" : "", sel: sel === ex,
-        dim: !passes(f),
+        dim: state !== "rejected" && !passes(f),
       } });
-    }
-    mv.current?.setResults({ type: "FeatureCollection", features: feats });
-  }, [pool, outlines, accSet, sel, passes, changes, compare]);
+    };
+    for (const f of pool) push(f, accSet.has(exampleOf(f)) ? "accepted" : "hit");
+    for (const ex of rejected) { const f = seenRef.current[ex] ?? results.find((r) => exampleOf(r) === ex); if (f) push(f, "rejected"); }
+    mv.current?.setResults({ type: "FeatureCollection", features: feats }, { exhaustive: scanMode === "exhaustive_scan" });
+  }, [pool, outlines, accSet, sel, passes, changes, compare, rejected, results, scanMode]);
 
   useEffect(() => {
     const fc: FC = { type: "FeatureCollection", features: cands.filter((c) => picks.includes(c.properties.example))
@@ -222,7 +232,7 @@ export default function App() {
         const pend = pending();
         if (!pend.length) break;
         const view = mv.current?.bounds();
-        const inView = view ? pend.filter((f) => inside(f.properties.cell_bbox, view)) : [];
+        const inView = view ? pend.filter((f) => inside(cellBboxOf(f), view)) : [];
         const pick = (inView.length ? inView : pend).slice()
           .sort((a, b) => Number(a.properties.rank ?? 0) - Number(b.properties.rank ?? 0));
         const batch = pick.slice(0, OUTLINE_BATCH).map(exampleOf);
@@ -282,7 +292,7 @@ export default function App() {
     mergeOutlines(feats.filter((f) => f.properties.geometry_kind === "outline"));
     setStage("results");
     if (fit) {
-      const b = unionBbox(feats.slice(0, 15).map((f) => f.properties.cell_bbox));
+      const b = unionBbox(feats.slice(0, 15).map(cellBboxOf));
       const pl = placeRef.current;
       if (b) mv.current?.fitBbox(b, { padding: 70, maxZoom: 17 });
       else if (pl && placeMap[pl]) mv.current?.fitBbox(placeMap[pl], { maxZoom: 15 });
@@ -367,6 +377,9 @@ export default function App() {
       }
       const ch: Record<string, string> = {};
       for (const f of env.result.geojson.features) ch[exampleOf(f)] = f.properties.change ?? "unsure";
+      // compare_years answers per cell ("chip#cell"); object-level results are "chip#cell:obj" — give each object its cell's answer
+      for (const f of resultsRef.current) { const ex = exampleOf(f), cellKey = ex.replace(/:[^#:]*$/, "");
+        if (!(ex in ch) && cellKey in ch) ch[ex] = ch[cellKey]; }
       setChanges(ch); setCompare("on");
     } catch (e) { setCompare("off"); setCompareNote(`compare_years failed: ${e}`); }
   }, [call, resultsRef, yearRef, conceptRef]);
@@ -374,7 +387,7 @@ export default function App() {
   // ---------------- filter / measure / export ----------------
   const visibleFC = useCallback((feats: Feature[]): FC => ({ type: "FeatureCollection", features: feats.map((f) => {
     const ex = exampleOf(f); const o = outlinesRef.current[ex];
-    return { type: "Feature", id: ex, geometry: o?.geometry ?? boxPoly(f.properties.cell_bbox), properties: {
+    return { type: "Feature", id: ex, geometry: o?.geometry ?? shapeOf(f), properties: {
       example: ex, rank: f.properties.rank, confidence: confOf(f), geometry_kind: o?.geometry ? "outline" : "box",
       area_m2: o?.area_m2 ?? null, area_acres: o?.area_acres ?? null, chip_id: f.properties.chip_id, cell: f.properties.cell,
       thumb_url: f.properties.thumb_url, accepted: accSet.has(ex) || undefined } };
@@ -546,7 +559,7 @@ export default function App() {
   // ---------------- small handlers ----------------
   const flyToFeature = (f: Feature) => {
     setSel(exampleOf(f));
-    mv.current?.fitBbox(f.properties.chip_bbox, { maxZoom: 18.5, padding: 40 });
+    mv.current?.fitBbox(f.properties.chip_bbox ?? cellBboxOf(f), { maxZoom: 18.5, padding: 40 });
   };
   const jumpTo = (name: string) => {
     const b = placeMap[name]; if (!b) return;
@@ -711,8 +724,12 @@ export default function App() {
                 </label>
                 {compareNote && <div className="lc-note">{compareNote}</div>}
                 {compare === "on" && (
-                  <div className="legend">{(["new", "existing", "unsure"] as const).map((k) =>
-                    <span key={k}><i style={{ background: COLORS[k] }} />{k}</span>)}</div>)}
+                  <div className="legend">{([["new", "new since 2020"], ["existing", "existing in 2020"], ["unsure", "unsure"]] as const).map(([k, l]) =>
+                    <span key={k}><i className="dot" style={{ background: COLORS[k] }} />{l}</span>)}</div>)}
+                <label className={`lc-toggle ${results.length ? "" : "disabled"}`} title="Dim the imagery ~30 % so results stand out">
+                  <input type="checkbox" checked={spotlight} onChange={(e) => setSpotlight(e.target.checked)} />
+                  <span>Spotlight results</span>
+                </label>
                 <div className="lc-sep" />
                 {CONTEXT_LAYERS.map((c) => (
                   <label key={c.key} className="lc-toggle">
@@ -722,12 +739,20 @@ export default function App() {
                   </label>))}
                 <div className="lc-sep" />
                 <div className="legend">
-                  <span><i style={{ background: COLORS.hit }} />outline</span>
+                  <span><i className="dot" style={{ background: COLORS.hit }} />result (dot when zoomed out, outline up close)</span>
                   <span><i className="dash" style={{ borderColor: COLORS.hit }} />cell (not outlined yet)</span>
-                  <span><i style={{ background: COLORS.accepted }} />accepted</span>
+                  <span><i className="ring" style={{ borderColor: COLORS.accepted }} />accepted</span>
                 </div>
               </div>)}
           </div>
+          {results.length > 0 && (
+            <div className="results-key" aria-label="Map key">
+              <span><i style={{ background: COLORS.hit }} />results</span>
+              <span><i style={{ background: COLORS.new }} />new since 2020</span>
+              <label title="Dim the imagery ~30 % so results stand out">
+                <input type="checkbox" checked={spotlight} onChange={(e) => setSpotlight(e.target.checked)} />spotlight
+              </label>
+            </div>)}
           <div className="badge">NAIP {year} · 0.6 m · {aoi ? `${pretty(aoi)}${isSlice ? " (slice index)" : ""}` : "no index"}</div>
           {dbg && <pre className="dbg">{dbg}</pre>}
           {err && <div className="toast" role="alert"><span>{err}</span><button onClick={() => setErr(null)}>×</button></div>}
