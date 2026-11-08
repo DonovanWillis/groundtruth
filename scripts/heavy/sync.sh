@@ -15,7 +15,12 @@ EXCL=(--exclude 'data/labels/' --exclude '.env*' --exclude '*.key' --exclude '__
 case "${1:-}" in
   code) rsync -az --delete "${EXCL[@]}" -e "$SSH" --rsync-path="$RPATH" engine scripts "$REMOTE:$DEST/" ;;
   push) rsync -az "${EXCL[@]}" -e "$SSH" --rsync-path="$RPATH" --relative "./$2" "$REMOTE:$DEST/" ;;
-  pull) rsync -az "${EXCL[@]}" -e "$SSH" --rsync-path="$RPATH" "$REMOTE:$DEST/$2/" "./$2/" ;;
+  pull)  # large binaries break rsync through ssh.exe pipes (EAGAIN): stage on the laptop's Windows side, then scp.exe
+    name=$(basename "$2"); parent=$(dirname "$2")
+    $SSH "$REMOTE" "wsl -d Ubuntu-24.04 -- bash -lc 'mkdir -p /mnt/c/Users/ashur/gt-out && rm -rf /mnt/c/Users/ashur/gt-out/$name && cp -r $DEST/$2 /mnt/c/Users/ashur/gt-out/'" 2>/dev/null
+    mkdir -p "$parent"
+    /mnt/c/Windows/System32/OpenSSH/scp.exe -q -r -i C:/Users/orynt/.ssh/id_ed25519_oryn -o BatchMode=yes \
+      "$REMOTE:C:/Users/ashur/gt-out/$name" "$(wslpath -w "$parent")" 2>&1 | grep -v "post-quantum\|store now\|openssh.com/pq" || true ;;
   *) echo "usage: sync.sh code | push <path> | pull <path>"; exit 2 ;;
 esac
 echo "sync $1 ${2:-} ok"
