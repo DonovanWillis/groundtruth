@@ -141,7 +141,7 @@ def parse(text: str) -> Plan:
     core = re.sub(r"(?:taller than|higher than|over|above|more than) \d+(?:\.\d+)? ?(?:m|metres?|meters?|ft|feet)\b(?: tall| high)?", " ", core)
     core = re.sub(r"\bnew\b|\bsince 20\d\d\b|\bin 20\d\d\b", " ", core)
     if p.place:
-        core = re.sub(rf"\b(in|around|near) {re.escape(p.place.lower())}\b", " ", core)
+        core = re.sub(rf"\b(in|around|near|on|at) {re.escape(p.place.lower())}\b", " ", core)
         core = core.replace(p.place.lower(), " ")
     core = re.sub(FILLER, "", re.sub(r"\s+", " ", core).strip()).strip()
     if re.search(r"\b(how tall|how high|height|canopy|cover)\b.*\btrees?\b|\btrees?\b.*\b(tall|height|canopy|cover)\b|"
@@ -231,7 +231,7 @@ def run(engine_for, text: str) -> dict[str, Any]:
         neg = [f["properties"]["example"] for f in tiles if f is not chosen]
         plan.notes.append(f"example: sense '{chosen['properties']['sense_id']}' ({ex}); other senses used as negatives")
         extra.update(chosen_sense=chosen["properties"]["sense_id"], chosen_example=ex, negatives=neg)
-        env = eng.find_all([ex], neg, place=plan.place if eng.aoi == "county" else None, concept=plan.concept,
+        env = eng.find_all([ex], [], place=plan.place if eng.aoi == "county" else None, concept=plan.concept, soft_exclude=neg,
                            within_layer=plan.host_layer)
         what = (plan.concept_query or plan.concept).replace("_", " ")
         r_fa = step("find_all", env)

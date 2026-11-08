@@ -60,3 +60,8 @@ def test_phase6_phrases_parse():
                                                                               "the airport")
     p = parse("solar on warehouses")
     assert (p.target_kind, p.concept, p.host_layer) == ("concept", "solar_installation", "osm_warehouses")
+
+
+def test_open_vocabulary_on_place():
+    p = parse("boat docks on Lake Norman")
+    assert (p.target_kind, p.target, p.place) == ("open", "boat docks", "Lake Norman")

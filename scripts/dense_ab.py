@@ -81,17 +81,21 @@ for p in mid:
     cell = (pr * eng.index.grid // 16) * eng.index.grid + (pc_ * eng.index.grid // 16)
     ex_b.append(f"{eng.index.ids[i]}#{cell}:{pr * 16 + pc_}")
 targets_b = [p for p in pools if p not in mid]
-for name, (E, N, targets) in {"demo_pick": (ex, neg, pools), "osm_examples": (ex_b, [], targets_b)}.items():
+BACKYARD_MAX_M2 = 150.0  # "backyard-only recall": OSM pools up to this size (community pools are bigger)
+for name, (E, N, S, targets) in {"demo_pick_hard": (ex, neg, [], pools), "demo_pick_soft": (ex, [], neg, pools),
+                                  "osm_examples": (ex_b, [], [], targets_b)}.items():
+    back = [t for t in targets if t.area <= BACKYARD_MAX_M2]
     res = {}
     for mode in (False, True):
-        env = eng.find_all(E, N, place=place, concept="swimming_pool", outline_top=500, dense=mode)
+        env = eng.find_all(E, N, place=place, concept="swimming_pool", outline_top=500, dense=mode, soft_exclude=S)
         feats = env.result.geojson["features"]
         m = env.result.metrics
         res["dense" if mode else "standard"] = {"count": len(feats), "osm_found": recall(feats, targets),
-                                                "osm_total": len(targets), "dense_added": m.get("dense_added"),
+                                                "osm_total": len(targets), "backyard_found": recall(feats, back),
+                                                "backyard_total": len(back), "dense_added": m.get("dense_added"),
                                                 "dense_matched": m.get("dense_matched"),
                                                 "ms": round(sum(s.ms for s in env.steps))}
-        if name == "demo_pick":
+        if name == "demo_pick_soft":
             tag = "dense" if mode else "standard"
             sheet(feats[:50], config.DATA / "out" / f"dense_{place}_top50_{tag}.png", f"{place} {tag}: top 50 of {len(feats)}")
             if mode:

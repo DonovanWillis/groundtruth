@@ -5,7 +5,7 @@ export const AGENT_DEMO_PROMPT = "pools within 1 km of I-485 in Ballantyne";
 // Landing chips: the measured, demo-ready requests (each < 2 s warm). Solar/parking stay typeable but are experimental.
 export const LANDING_CHIPS = [
   "find swimming pools", "pools within 1 km of I-485 in Ballantyne", "pools in flood zones in Matthews",
-  "new pools since 2020 in Ballantyne",
+  "new pools since 2020 in Ballantyne", "boat docks on Lake Norman",
 ];
 export const AGENT_CHIPS = [...LANDING_CHIPS, "parking lots in Uptown (experimental)", "solar on warehouses (experimental)"];
 export const DEFAULT_PLACES = ["Ballantyne", "NoDa", "South End", "Myers Park", "Lake Norman", "University City", "Matthews", "Uptown"];

@@ -74,7 +74,7 @@ def main() -> None:
     pick = next((f for f in feats if f["properties"].get("sense_id") == "backyard_pool"), feats[0])
     ex, concept = pick["properties"]["example"], pc["result"]["metrics"].get("sense_list")
     negs = [f["properties"]["example"] for f in feats if f is not pick]  # unpicked senses = "not this"
-    body = {"examples": [ex], "exclude": negs, "concept": concept, "k": 200, "outline_top": 300}
+    body = {"examples": [ex], "soft_exclude": negs, "concept": concept, "k": 200, "outline_top": 300}  # unpicked senses = soft
     if place:
         body["place"] = place
     fa = call("find_all", body)

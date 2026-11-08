@@ -117,6 +117,7 @@ class FindAllIn(Common):
     outline_top: int = Field(300, ge=0, le=500)
     within_layer: str | None = None
     dense: bool | None = None
+    soft_exclude: list[str] = []
 
 
 class RefineIn(Common):
@@ -209,7 +210,8 @@ def _warmup() -> None:
             ex = next((f["properties"]["example"] for f in feats if f["properties"]["sense_id"] == "backyard_pool"),
                       feats[0]["properties"]["example"])
             neg = [f["properties"]["example"] for f in feats if f["properties"]["example"] != ex]
-            fa = e.find_all([ex], neg, place=WARM["place"] if e.aoi == "county" else None, concept="swimming_pool")
+            fa = e.find_all([ex], [], place=WARM["place"] if e.aoi == "county" else None, concept="swimming_pool",
+                            soft_exclude=neg)
             hits = fa.result.geojson["features"]
             if hits:
                 e.refine(None, [ex, hits[0]["properties"]["example"]], [hits[-1]["properties"]["example"]], k=50,
@@ -225,9 +227,10 @@ def _warmup() -> None:
 
                 for pl in json.loads((config.SENSES_PATH.parent / "places.json").read_text())["places"]:
                     idle()
-                    e.find_all([ex], neg, place=pl, concept="swimming_pool")
+                    e.find_all([ex], [], place=pl, concept="swimming_pool", soft_exclude=neg)
                 for chip in ("find swimming pools", "pools within 1 km of I-485 in Ballantyne",
-                             "pools in flood zones in Matthews", "new pools since 2020 in Ballantyne"):
+                             "pools in flood zones in Matthews", "new pools since 2020 in Ballantyne",
+                             "boat docks on Lake Norman"):
                     idle()
                     plan_run(lambda year: eng(None, year), chip)
                 WARM["places_ms"] = round((_t.perf_counter() - t0) * 1000)
@@ -333,7 +336,7 @@ def t_find_similar(b: FindSimilarIn) -> JSONResponse:
 def t_find_all(b: FindAllIn) -> JSONResponse:
     return _env(eng(b.aoi, b.year).find_all(b.examples, b.exclude, k=b.k, bbox=b.bbox, place=b.place,
                                             concept=b.concept, rerank=b.rerank, outline_top=b.outline_top,
-                                            within_layer=b.within_layer, dense=b.dense))
+                                            within_layer=b.within_layer, dense=b.dense, soft_exclude=b.soft_exclude))
 
 
 @app.post("/api/v1/tools/compare_years")

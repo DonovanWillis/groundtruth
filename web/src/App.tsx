@@ -33,7 +33,8 @@ const LIST_MAX = 120;
 
 /** A feature whose geometry is still the cell/box placeholder (outline pending). */
 const isPending = (f: Feature) => f.properties.geometry_kind === "box" || f.properties.geometry_kind === "cell";
-/** Clear pick tiles (not `no_clear_example`) that were not picked: sent as negatives (`exclude`). */
+/** Clear pick tiles (not `no_clear_example`) that were not picked. Tiles the user marked "not this" go as HARD negatives
+ *  (`exclude`: can veto an object); the rest are other meanings of the word and go as SOFT negatives (`soft_exclude`). */
 const negativesFor = (cands: Feature[], picks: string[]) =>
   cands.filter((c) => !c.properties.no_clear_example && c.properties.example && !picks.includes(c.properties.example))
     .map((c) => c.properties.example as string);
@@ -293,7 +294,8 @@ export default function App() {
     negRef.current = negEx;
     setErr(null); setBusy("Finding every match…");
     try {
-      const env = await call("find_all", { examples: posEx, exclude: negEx, k: 200, concept: conceptRef.current ?? undefined,
+      const hard = negEx.filter((e) => notsRef.current.includes(e)), soft = negEx.filter((e) => !notsRef.current.includes(e));
+      const env = await call("find_all", { examples: posEx, exclude: hard, soft_exclude: soft, k: 200, concept: conceptRef.current ?? undefined,
         rerank: true, outline_top: 200, ...(placeRef.current ? { place: placeRef.current } : {}) });
       if (env.status === "declined") { setErr(`Declined: ${env.declined_reason}`); return; }
       setAccepted([]); setRejected([]); setSession(null);
@@ -312,7 +314,7 @@ export default function App() {
     try {
       const first = !sessionRef.current;
       const accept = first ? [...picksRef.current, ...acc.map(exampleOf)] : ok ? [ex] : [];
-      const reject = first ? [...new Set([...negRef.current, ...notsRef.current, ...rej])] : ok ? [] : [ex];
+      const reject = first ? [...new Set([...notsRef.current, ...rej])] : ok ? [] : [ex];  // only HARD negatives seed refine
       // v0.4: re-score exactly the current objects; the returned features ARE the new counted set
       const candidates = resultsRef.current.map(exampleOf);
       const env = await call("refine", { session_id: sessionRef.current, accept, reject, k: 200, candidates,
@@ -600,6 +602,7 @@ export default function App() {
                   <div className="stat"><b>{stats.median == null ? "—" : Math.round(stats.median)}<small> m²</small></b><span>median area</span></div>
                 </div>
                 <div className="count-line">
+                  {faMetrics?.dense && <span className="tag dense" title={`Dense mode: ${faMetrics.dense_added ?? 0} objects added from ${faMetrics.dense_proposals ?? "?"} pre-computed colour-blob proposals (built ${faMetrics.dense_built ?? "?"})`}>dense</span>}{" "}
                   <b>{stats.total}</b> {topK ? "top results (not exhaustive)" : "detected"} · <b>{stats.outlinedAll}</b> outlined
                   {objRejected > 0 && <> · <b>{objRejected}</b> rejected by object check</>}
                   {scanMode === "exhaustive_scan" && faMetrics?.chips_in_box != null &&

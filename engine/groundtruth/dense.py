@@ -253,8 +253,26 @@ class DenseSet:
         idx = np.nonzero(m)[0]
         return sorted(idx.tolist(), key=lambda k: (-float(S[k]), k))
 
+    def heights(self) -> np.ndarray:
+        """Median lidar height-above-ground inside each outline (NaN where there's no lidar or no outline). Cached."""
+        if getattr(self, "_h", None) is None:
+            from groundtruth import lidar
+            from groundtruth.geo import to_measure
+
+            h = np.full(len(self.feats), np.nan)
+            lp = lidar.place_for(self.meta["bbox"])
+            if lp:
+                for k, f in enumerate(self.feats):
+                    if f.get("geometry"):
+                        v = lidar.values(to_measure(shape(f["geometry"])), lp)
+                        if len(v):
+                            h[k] = float(np.median(v))
+            self._h = h
+        return self._h
+
     def passed_with(self, oc: dict[str, Any]) -> np.ndarray:
-        """Re-apply the object check with (possibly different) thresholds from the stored per-proposal measurements."""
+        """Re-apply the object check with (possibly different) thresholds from the stored per-proposal measurements;
+        plus the lidar height rule (``max_height_m``: median height-above-ground) where lidar exists."""
         lo, hi = oc.get("area_m2", [0, 1e12])
         out = np.zeros(len(self.feats), bool)
         for k, f in enumerate(self.feats):
@@ -264,6 +282,9 @@ class DenseSet:
             out[k] = (lo <= c["area_m2"] <= hi and c["compactness"] >= oc.get("compactness_min", 0)
                       and c["colour_frac"] >= oc.get("colour_frac_min", 0)
                       and c["colour_area_m2"] >= oc.get("colour_area_min_m2", 0))
+        if oc.get("max_height_m") is not None:
+            h = self.heights()
+            out &= ~(h > float(oc["max_height_m"]))  # NaN (no lidar) passes
         return out
 
     def sims(self, qp: np.ndarray) -> np.ndarray:

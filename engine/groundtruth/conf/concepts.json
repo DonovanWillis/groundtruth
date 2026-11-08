@@ -9,9 +9,11 @@
   "swimming_pool": {
     "rerank": {"patch_weight": 0.6, "colour_weight": 0.4, "colour": {"hsv_lo": [170, 80, 110], "hsv_hi": [205, 255, 255]}, "pool": 400},
     "count_conf": 0.5,
-    "detect": {"prefilter_sim": 0.45, "score_min": 0.62, "colour_min": 0.12, "sim_min": 0.25, "nms_m": 12, "neg_margin": 0.0},
-    "dense": {"auto": true, "require_patch_colour": false, "sim_min": 0.25, "object_check": {"compactness_min": 0.2, "colour_frac_min": 0.3}, "_doc": "Dense proposals are concept-colour blobs that passed the object check; at query time they only need DINOv2 similarity ≥ sim_min and to be closer to the picked examples than to the not-this negatives."},
+    "detect": {"prefilter_sim": 0.45, "score_min": 0.62, "colour_min": 0.12, "sim_min": 0.25, "nms_m": 12, "neg_margin": 0.0,
+               "soft_neg_weight": 0.25},
+    "dense": {"auto": true, "require_patch_colour": false, "sim_min": 0.35, "object_check": {"compactness_min": 0.2, "colour_frac_min": 0.3}, "_doc": "Dense proposals are concept-colour blobs that passed the object check; at query time they only need DINOv2 similarity ≥ sim_min and to be closer to the picked examples than to the not-this negatives."},
     "object_check": {"area_m2": [10, 2000], "compactness_min": 0.3, "colour_frac_min": 0.5, "colour_area_min_m2": 6,
+                     "max_height_m": 1.5,
                      "outline_by_colour": true,
                      "_doc": "SAM outlines of pools often include the deck/yard, so with outline_by_colour the final outline = SAM mask ∩ pool-cyan pixels (dilated 1 px), the connected piece at the prompt. Area range, compactness and colour fraction are checked on that refined outline."}
   },

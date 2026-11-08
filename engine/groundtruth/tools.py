@@ -105,13 +105,20 @@ def memo(complete: Any = None):
     import functools
 
     def deco(fn):
+        import inspect
+
+        sig = inspect.signature(fn)
+
         @functools.wraps(fn)
         def wrapper(self, *a, **kw):
             from groundtruth.rerank import concept_conf
 
             cache = self.__dict__.setdefault("_memo", OrderedDict())
-            ck = kw.get("concept")
-            key = (fn.__name__, json.dumps([a, kw], sort_keys=True, default=str),
+            bound = sig.bind(self, *a, **kw)  # positional and keyword calls share one key
+            bound.apply_defaults()
+            args = {k: v for k, v in bound.arguments.items() if k != "self"}
+            ck = args.get("concept")
+            key = (fn.__name__, json.dumps(args, sort_keys=True, default=str),
                    json.dumps(concept_conf(ck), sort_keys=True) if ck else None)
             if key in cache:
                 cache.move_to_end(key)
@@ -709,10 +716,22 @@ class Engine:
             reasons.append(f"colour {colour_frac:.2f} < {oc['colour_frac_min']}")
         if colour_area is not None and colour_area < oc.get("colour_area_min_m2", 0):
             reasons.append(f"colour area {colour_area:.0f} m² < {oc['colour_area_min_m2']}")
+        height = None
+        if oc.get("max_height_m") is not None and os.environ.get("GROUNDTRUTH_HEIGHT_CHECK", "1") == "1":
+            from groundtruth import lidar
+
+            gw = shape(refined_geom or outline["geometry"])
+            lp = lidar.place_for(gw.bounds)
+            if lp:  # pools sit at ground level; a blue roof or a shadowed roof edge has height
+                v = lidar.values(to_measure(gw), lp)
+                if len(v):
+                    height = float(np.median(v))
+                    if height > float(oc["max_height_m"]):
+                        reasons.append(f"height {height:.1f} m > {oc['max_height_m']} (lidar)")
         res = {"pass": not reasons, "reason": "; ".join(reasons) or "ok", "area_m2": round(area, 1),
                "compactness": round(float(comp), 3), "colour_frac": None if colour_frac is None else round(colour_frac, 3),
                "colour_area_m2": None if colour_area is None else round(colour_area, 1),
-               "refined": refined_geom is not None}
+               "height_m": None if height is None else round(height, 2), "refined": refined_geom is not None}
         if refined_geom is not None:
             res["geometry"] = refined_geom
         cache[key] = res
@@ -763,9 +782,11 @@ class Engine:
     def find_all(self, examples: Sequence[str], exclude: Sequence[str] = (), k: int = 200,
                  bbox: Sequence[float] | None = None, place: str | None = None, concept: str | None = None,
                  rerank: bool = True, outline_top: int = 300, within_layer: str | None = None,
-                 dense: bool | None = None) -> Envelope:
+                 dense: bool | None = None, soft_exclude: Sequence[str] = ()) -> Envelope:
         """The count. With a place/bbox: EXHAUSTIVE scan of every chip and cell in the box (scan.py): every object above
-        the concept threshold, deduped across chip borders, negatives ("not this") applied; outlines for the top
+        the concept threshold, deduped across chip borders. ``exclude`` = HARD negatives (the user's explicit "not
+        this": an object closer to them than to the examples is dropped); ``soft_exclude`` = SOFT negatives (the
+        unpicked senses: only nudge the query, never veto an object). Outlines for the top
         ``outline_top`` are queued (SAM 2, patch-prompted) and every cached outline passes an object check (area,
         compactness, colour; conf/concepts.json); failed objects drop out of the count. County-wide (no box): ranked
         top-k mode, stated in limits. Every count in the response is the same unit: deduped objects that are not
@@ -782,13 +803,15 @@ class Engine:
                 rows = self._layer_rows(within_layer, bbox)
             except KeyError as e:
                 return declined(tool, VERSION, str(e))
-            return self._find_all_scan(examples, exclude, bbox, place, concept, outline_top, rows=rows,
+            return self._find_all_scan(examples, exclude, bbox, place, concept, outline_top, rows=rows, soft=soft_exclude,
                                        scope=f"chips covering layer '{within_layer}'")
         if bbox:
-            return self._find_all_scan(examples, exclude, bbox, place, concept, outline_top, dense=dense)
+            return self._find_all_scan(examples, exclude, bbox, place, concept, outline_top, dense=dense,
+                                       soft=soft_exclude)
         self.__dict__["_busy"] = self.__dict__.get("_busy", 0) + 1
         try:
-            base = self.find_similar(examples, exclude, k=k, bbox=bbox, rerank=rerank, concept=concept)
+            base = self.find_similar(examples, list(exclude) + list(soft_exclude), k=k, bbox=bbox, rerank=rerank,
+                                     concept=concept)
         finally:
             self._busy -= 1
         if base.status == "declined":
@@ -870,7 +893,7 @@ class Engine:
 
     def _find_all_scan(self, examples: Sequence[str], exclude: Sequence[str], bbox: Sequence[float] | None,
                        place: str | None, concept: str | None, outline_top: int, rows: np.ndarray | None = None,
-                       scope: str | None = None, dense: bool | None = None) -> Envelope:
+                       scope: str | None = None, dense: bool | None = None, soft: Sequence[str] = ()) -> Envelope:
         from groundtruth.scan import scan
 
         tool = "find_all"
@@ -878,6 +901,7 @@ class Engine:
         if not pos:
             return declined(tool, VERSION, "none of the example ids are in the index")
         neg = self._example_cells(exclude)
+        softc = self._example_cells(soft)
         if rows is None:
             rows = self._bbox_rows(bbox)
         scope = scope or "the box"
@@ -890,14 +914,14 @@ class Engine:
                 cache = self.__dict__.setdefault("_scan_cache", OrderedDict())
                 from groundtruth.rerank import concept_conf as _cc
 
-                key = (tuple(pos), tuple(neg), hash(np.asarray(rows).tobytes()), concept,
+                key = (tuple(pos), tuple(neg), tuple(softc), hash(np.asarray(rows).tobytes()), concept,
                        json.dumps(_cc(concept), sort_keys=True))
                 if key in cache:
                     cache.move_to_end(key)
                     dets, info = cache[key]
                     st.detail += " (cached scan)"
                 else:
-                    dets, info = scan(self, pos, neg, rows, concept)
+                    dets, info = scan(self, pos, neg, rows, concept, soft=softc)
                     cache[key] = (dets, info)
                     while len(cache) > int(os.environ.get("GROUNDTRUTH_SCAN_CACHE", "64")):
                         cache.popitem(last=False)
@@ -927,7 +951,7 @@ class Engine:
         if self._dense_wanted(dense, place, concept):
             with t.step("dense", "dense proposals (colour blobs in centred windows, SAM 2 + verifier, cached) matched "
                                  "to the examples, merged with the scan by distance") as st:
-                out, dense_info = self._merge_dense(out, pos, neg, place, concept, smin)
+                out, dense_info = self._merge_dense(out, pos, neg, place, concept, smin, soft=softc)
                 st.detail += (f": {dense_info['dense_matched']} dense matches, {dense_info['dense_added']} not found by "
                               f"the standard scan → {len(out)} objects")
         for r, f in enumerate(out):
@@ -967,7 +991,7 @@ class Engine:
             return False
         return bool(dense) or bool(concept_conf(concept).get("dense", {}).get("auto", True))
 
-    def _merge_dense(self, out: list[dict[str, Any]], pos, neg, place: str, concept: str, smin: float):
+    def _merge_dense(self, out: list[dict[str, Any]], pos, neg, place: str, concept: str, smin: float, soft=()):
         from groundtruth import dense as D
         from groundtruth.rerank import concept_conf
         from groundtruth.scan import query_vectors
@@ -978,7 +1002,7 @@ class Engine:
             cache[key] = D.DenseSet(place, concept, self.year)
         ds: D.DenseSet = cache[key]
         det = concept_conf(concept)["detect"]
-        P, N, qp = query_vectors(self, pos, neg, concept)
+        P, N, qp = query_vectors(self, pos, neg, concept, soft=soft)
         match = ds.match(P, N, qp, det)
         S = ds.sims(qp)
         ids = ds.index_ids(self.index)
@@ -1608,6 +1632,7 @@ class Engine:
                          limits=["Free-flow speeds, no live traffic or time of day; confidence is a fixed heuristic"],
                          sources=[self.provider.routing_source()], steps=t.steps)
 
+    @memo()
     def find_anything(self, text: str, bbox: Sequence[float] | None = None, place: str | None = None) -> Envelope:
         """Open vocabulary (concepts not in senses.json): CLIP chips → Grounding DINO boxes → SAM 2.1 → verifier."""
         tool = "find_anything"

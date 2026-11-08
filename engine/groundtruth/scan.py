@@ -66,12 +66,17 @@ def _thumb(index, i: int) -> np.ndarray:
 
 
 def query_vectors(eng, positives: Sequence[tuple[int, int]], negatives: Sequence[tuple[int, int]],
-                  concept: str | None, neg_weight: float = 0.5):
+                  concept: str | None, neg_weight: float = 0.5, soft: Sequence[tuple[int, int]] = (),
+                  soft_weight: float | None = None):
     """Patch-level example vectors: per example cell, the patch with the most concept colour (else the cell mean).
-    → (P (k,768), N (m,768) or None, qp = normalised mean(P) − neg_weight·mean(N))."""
+    HARD negatives (the user's explicit "not this") also drive the per-object rule Sp > Sn + margin; SOFT negatives
+    (the unpicked senses: other meanings of the word) only nudge the query.
+    → (P (k,768), N_hard (m,768) or None, qp = normalised mean(P) − neg_weight·mean(N_hard) − soft_weight·mean(N_soft))."""
     idx = eng.index
     rule = concept_conf(concept)["rerank"].get("colour")
-    ex_rows = [i for i, _ in positives] + [i for i, _ in negatives]
+    if soft_weight is None:
+        soft_weight = float(concept_conf(concept)["detect"].get("soft_neg_weight", 0.25))
+    ex_rows = [i for i, _ in positives] + [i for i, _ in negatives] + [i for i, _ in soft]
     T_ex, RGB_ex, _ = patch_tokens(idx, ex_rows)
 
     def ex_vec(k: int, cell: int) -> np.ndarray:
@@ -87,15 +92,20 @@ def query_vectors(eng, positives: Sequence[tuple[int, int]], negatives: Sequence
 
     P = np.stack([ex_vec(k, c) for k, (_, c) in enumerate(positives)])
     N = np.stack([ex_vec(len(positives) + k, c) for k, (_, c) in enumerate(negatives)]) if negatives else None
+    off = len(positives) + len(negatives)
+    Ns = np.stack([ex_vec(off + k, c) for k, (_, c) in enumerate(soft)]) if soft else None
     qp = P.mean(0)
     if N is not None:
         qp = qp - neg_weight * N.mean(0)
+    if Ns is not None:
+        qp = qp - soft_weight * Ns.mean(0)
     qp /= max(np.linalg.norm(qp), 1e-9)
     return P, N, qp
 
 
 def scan(eng, positives: Sequence[tuple[int, int]], negatives: Sequence[tuple[int, int]], rows: np.ndarray,
-         concept: str | None, neg_weight: float = 0.5) -> tuple[list[Detection], dict[str, Any]]:
+         concept: str | None, neg_weight: float = 0.5,
+         soft: Sequence[tuple[int, int]] = ()) -> tuple[list[Detection], dict[str, Any]]:
     cc = concept_conf(concept)
     det, rr = cc["detect"], cc["rerank"]
     rule, wc, wp = rr.get("colour"), float(rr.get("colour_weight", 0)), float(rr.get("patch_weight", 1))
@@ -106,6 +116,8 @@ def scan(eng, positives: Sequence[tuple[int, int]], negatives: Sequence[tuple[in
     q = np.mean([idx.cells(i)[c] for i, c in positives], 0)
     if negatives:
         q = q - neg_weight * np.mean([idx.cells(i)[c] for i, c in negatives], 0)
+    if soft:
+        q = q - float(det.get("soft_neg_weight", 0.25)) * np.mean([idx.cells(i)[c] for i, c in soft], 0)
     q /= max(np.linalg.norm(q), 1e-9)
     chip_max = np.concatenate([(np.asarray(idx.dino[rows[k:k + 4096]], np.float32) @ q).max(1)
                                for k in range(0, len(rows), 4096)]) if len(rows) else np.zeros(0)
@@ -128,7 +140,7 @@ def scan(eng, positives: Sequence[tuple[int, int]], negatives: Sequence[tuple[in
         return [], info
     # 3. full-res patch tokens (examples + candidates), patch-level query
     t2 = time.perf_counter()
-    P, N, qp = query_vectors(eng, positives, negatives, concept, neg_weight)
+    P, N, qp = query_vectors(eng, positives, negatives, concept, neg_weight, soft=soft)
     import torch
 
     from groundtruth.rerank import GPU_PATCHES, colour_map
