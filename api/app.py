@@ -300,6 +300,18 @@ def layers() -> list[str]:
     return _provider.layer_names()
 
 
+@app.get("/api/v1/geocode")
+async def geocode(q: str) -> dict[str, Any]:
+    """Resolve an address typed by the user; never infer device location."""
+    if len(q.strip()) > 200:
+        raise HTTPException(422, "address query is too long")
+    try:
+        candidates = await _provider.geocode(q)
+    except Exception as exc:
+        raise HTTPException(502, "address search is temporarily unavailable") from exc
+    return {"query": q.strip(), "candidates": candidates}
+
+
 @app.get("/api/v1/chips/{chip_id}.jpg")
 def chip(chip_id: str, year: int | None = None, aoi: str | None = None) -> Response:
     y = year or int(chip_id.split("_", 1)[0])
@@ -384,6 +396,7 @@ class FindPlaceIn(Common):
     bbox: list[float] | None = None
     place: str | None = None
     limit: int = Field(5000, ge=1, le=20000)
+    origin: list[float] | None = Field(default=None, min_length=2, max_length=2)
 
 
 class IsochroneIn(Common):
@@ -408,7 +421,8 @@ class FindAnythingIn(Common):
 
 @app.post("/api/v1/tools/find_place")
 def t_find_place(b: FindPlaceIn) -> JSONResponse:
-    return _env(eng(b.aoi, b.year).find_place(b.query, bbox=b.bbox, place=b.place, limit=b.limit))
+    return _env(eng(b.aoi, b.year).find_place(b.query, bbox=b.bbox, place=b.place,
+                                              limit=b.limit, origin=b.origin))
 
 
 @app.post("/api/v1/tools/isochrone")

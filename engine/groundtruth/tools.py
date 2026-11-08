@@ -1595,7 +1595,7 @@ class Engine:
                       "minutes": minutes, "mode": mode, "area_km2": round(area.area / 1e6, 3)}
 
     def find_place(self, query: str, bbox: Sequence[float] | None = None, place: str | None = None,
-                   limit: int = 5000) -> Envelope:
+                   limit: int = 5000, origin: Sequence[float] | None = None) -> Envelope:
         """Overture places by category word (conf/places_categories.json) or by name; within a place/bbox if given."""
         tool = "find_place"
         if _people(query):
@@ -1604,27 +1604,43 @@ class Engine:
 
         if place and not bbox:
             bbox = self.place_bbox(place)
+        if origin is not None and (len(origin) != 2 or not -180 <= origin[0] <= 180 or not -90 <= origin[1] <= 90):
+            return declined(tool, VERSION, "origin must be [longitude, latitude] in EPSG:4326")
         t = StepTimer()
         rc = self.resolve_category(query)
         with t.step("query", f"DuckDB spatial: {'category ' + rc[0] if rc else 'name ~ ' + repr(query)}"):
             if rc:
-                fc, ms = store().places(bbox, rc[1].get("category", []), taxonomy=rc[1].get("taxonomy", []), limit=limit)
+                fc, ms = store().places(bbox, rc[1].get("category", []), taxonomy=rc[1].get("taxonomy", []),
+                                        limit=None if origin is not None else limit)
             else:
-                fc, ms = store().places(bbox, name=query, limit=limit)
+                fc, ms = store().places(bbox, name=query, limit=None if origin is not None else limit)
+        if origin is not None:
+            from shapely.geometry import Point
+
+            start = to_measure(Point(float(origin[0]), float(origin[1])))
+            for f in fc["features"]:
+                f["properties"]["dist_m"] = round(start.distance(to_measure(shape(f["geometry"]))), 1)
+            fc["features"].sort(key=lambda f: (f["properties"]["dist_m"], str(f["properties"].get("id") or f.get("id"))))
+        matched = len(fc["features"])
         feats = []
-        for r, f in enumerate(fc["features"]):
+        for r, f in enumerate(fc["features"][:limit]):
             p = f["properties"]
             feats.append({"type": "Feature", "id": f["id"], "geometry": f["geometry"],
                           "properties": {"id": p.get("id"), "name": p.get("name"), "category": p.get("category"),
                                          "confidence": round(float(p.get("confidence") or 0), 3), "rank": r + 1,
-                                         "source_dataset": p.get("source_dataset")}})
+                                         "source_dataset": p.get("source_dataset"),
+                                         **({"dist_m": p["dist_m"]} if origin is not None else {})}})
         return self._env(tool, status="ok", result=Result(geojson=feature_collection(feats), metrics={
             "count": len(feats), "match": "category" if rc else "name", "category": rc[0] if rc else None,
-            "bbox": list(bbox) if bbox else None, "place": place, "truncated": len(feats) >= limit}),
+            "bbox": list(bbox) if bbox else None, "place": place, "truncated": matched > limit,
+            "origin": list(origin) if origin is not None else None,
+            "sort": "distance_m_ascending" if origin is not None else "id_ascending"}),
             confidence=self._mean_conf(feats) or 0.0,
             method="Overture places (local parquet) queried with DuckDB spatial by category or name; "
                    "confidence = Overture's own place confidence",
-            limits=["Overture places are crowd/partner-sourced: some are missing, closed or misplaced",
+            limits=(["Distances are straight-line measurements from the chosen point in EPSG:32617, not travel time"]
+                    if origin is not None else []) +
+                   ["Overture places are crowd/partner-sourced: some are missing, closed or misplaced",
                     "Category words map to Overture categories via conf/places_categories.json"],
             sources=[self.provider.overture_source("places")], steps=t.steps)
 

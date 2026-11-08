@@ -15,6 +15,7 @@ Every tool, whether an engine function, an HTTP route or an agent action, return
 | display tiles | `GET /api/v1/tiles/naip/{year}/{z}/{x}/{y}.png` (XYZ, z 10–18; USDA NAIP via Planetary Computer, cached) |
 | boundary | `GET /api/v1/boundary` → the Mecklenburg County GeoJSON Feature |
 | places | `GET /api/v1/places` → `{source, places: {name: [w,s,e,n]}}`: neighbourhood boxes (OSM Nominatim, ODbL) for `place` / `inside_place` |
+| address search | `GET /api/v1/geocode?q=<user-entered address>` → `{query, candidates: [{label, center: [lon,lat], bbox: [w,s,e,n], source}]}`. The client must require an explicit selection; no device location is read. OSM Nominatim results are cached and limited to Mecklenburg County. |
 | export files | `GET /api/v1/exports/{name}` → the file that an `export` call wrote (`metrics.download`) |
 | agent stream | `GET /api/v1/events` (SSE). **Reserved**; not implemented in v0.1 |
 
@@ -80,7 +81,7 @@ built, otherwise the largest indexed slice).
 | tool | request body | result |
 |---|---|---|
 | `find_all` | adds `dense?: bool` (null = auto when a dense build exists for the place), `within_layer?: str` | with dense: `metrics.dense=true, dense_matched, dense_added, dense_replaced_boxes, dense_proposals, dense_passed_verifier, dense_built`; dense objects carry `dense_id` and the same `chip#cell:patch` `example` ids |
-| `find_place` | `{query: str, bbox?\|place?, limit?: int=5000}` | Overture places by category word (`conf/places_categories.json`) or name. Points with `name, category, confidence` (Overture's). `metrics.count, match ("category"\|"name"), truncated` |
+| `find_place` | `{query: str, bbox?\|place?, origin?: [lon,lat], limit?: int=5000}` | Overture places by category word (`conf/places_categories.json`) or name. With `origin`, returns nearest first by measured straight-line `dist_m` in EPSG:32617, stable ties by place ID. Points carry `name, category, confidence`, and `dist_m` when requested. `metrics.count, match ("category"\|"name"), truncated, sort` |
 | `isochrone` | `{origin: {lon,lat}\|str, minutes?: 10, mode?: "drive"\|"walk"\|"bike"}` | one polygon (Valhalla on OSM roads). `metrics.origins[], minutes, mode, area_km2` |
 | `find_buildings` | `{kind?: "building"\|"house"\|"apartment"\|..., bbox?\|place?, min_height_m?, limit?}` | Overture footprints with `class, height_m, height_source ("lidar"\|"overture"), area_m2`. `metrics.count, kind, classes` |
 | `find_anything` | `{text: str, bbox?\|place?}` | open vocabulary (Grounding DINO + SAM 2.1). Same object properties as find_all plus `detector_score`; `metrics.mode="open_vocabulary", chips_searched, raw_boxes, eye_precision_12, low_confidence` |

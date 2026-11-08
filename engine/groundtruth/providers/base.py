@@ -95,3 +95,7 @@ class DataProvider(ABC):
         """Provenance for one dataset key; default: all sources whose name contains ``key``."""
         k = key.lower()
         return [s for s in self.sources() if k in s.name.lower()]
+
+    async def geocode(self, query: str) -> list[dict[str, Any]]:
+        """Resolve an address explicitly entered by a user. No device location lookup."""
+        raise NotImplementedError("address geocoding is unavailable for this provider")
